@@ -1,0 +1,41 @@
+# ── Core Framework ──────────────────────────────────────────
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langchain-community>=0.3.0
+langgraph>=0.2.0
+
+# ── Settings & Validation ────────────────────────────────────
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+pyyaml>=6.0.0
+
+# ── Database & Storage ───────────────────────────────────────
+# SQLite is built into Python; aiosqlite for async support
+aiosqlite>=0.20.0
+
+# ── Vector Store ─────────────────────────────────────────────
+chromadb>=0.5.0
+
+# ── Web / API ────────────────────────────────────────────────
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+websockets>=12.0
+
+# ── Logging ──────────────────────────────────────────────────
+structlog>=24.0.0
+
+# ── ASR (Sherpa-ONNX) — install separately on target device ──
+# sherpa-onnx>=1.10.0
+
+# ── Audio I/O ────────────────────────────────────────────────
+# sounddevice>=0.5.0
+# soundfile>=0.12.0
+
+# ── Computer Vision / ROS Bridge ─────────────────────────────
+# opencv-python>=4.9.0  (install on target device)
+# rclpy                 (provided by ROS2 environment)
+
+# ── Utilities ────────────────────────────────────────────────
+numpy>=1.26.0
+httpx>=0.27.0

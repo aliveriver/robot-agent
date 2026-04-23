@@ -1,0 +1,88 @@
+app:
+  lang: cn          # 默认语言: cn | en
+  log_level: INFO
+  env: development   # development | production
+
+# ── LLM ──────────────────────────────────────────────────────
+llm:
+  api_url: ""        # 从 .env LLM_API_URL 覆盖
+  model: ""          # 从 .env LLM_MODEL_NAME 覆盖
+  multimodal_model: ""
+  max_tokens: 512
+  temperature: 0.7
+  timeout: 30        # 秒
+
+# ── TTS ──────────────────────────────────────────────────────
+tts:
+  provider: kokoro   # kokoro | minimax
+  ws_url: ""         # 从 .env KOKORO_WS_URL 覆盖
+  default_voice: zh_spongebob
+  speed: 1.0
+
+# ── ASR ──────────────────────────────────────────────────────
+asr:
+  provider: sherpa   # sherpa | qwen
+  model_dir: ""      # 从 .env SHERPA_MODEL_DIR 覆盖
+
+# ── Audio ────────────────────────────────────────────────────
+audio:
+  sample_rate: 16000
+  channels: 1
+  blocksize: 1600
+  input_device: ""
+  output_device: ""
+  input_gain: 0.35
+  noise_floor: 0.01
+  speech_threshold: 0.03
+  max_silence_sec: 0.45
+  max_segment_sec: 8.0
+  min_segment_sec: 0.3
+
+# ── Wake Words ───────────────────────────────────────────────
+wake:
+  words_cn:
+    - "你好罗比特"
+    - "你好，罗比特"
+  words_en:
+    - "hi robit"
+    - "hello robit"
+  exit_words_cn:
+    - "再见罗比特"
+  exit_words_en:
+    - "bye robit"
+  stop_words_cn:
+    - "停"
+    - "闭嘴"
+    - "安静"
+    - "罗比特停"
+  stop_words_en:
+    - "stop"
+    - "quiet"
+    - "robit stop"
+
+# ── Memory ───────────────────────────────────────────────────
+memory:
+  short_term_max_turns: 15          # 工作记忆保留轮数
+  summary_every_n_turns: 8          # 每 N 轮生成一次会话摘要
+  episodic_importance_threshold: 0.7 # 重要性分数阈值（0~1）
+
+# ── Knowledge Base ───────────────────────────────────────────
+knowledge:
+  chunk_size: 512
+  chunk_overlap: 64
+  top_k: 5
+
+# ── Tools ────────────────────────────────────────────────────
+tools:
+  enabled:
+    - search_memory
+    - search_knowledge
+    - capture_scene
+    - save_profile_fact
+    - get_time
+    - get_robot_status
+
+# ── Database ─────────────────────────────────────────────────
+database:
+  sqlite_path: data/robot.db
+  chroma_persist_dir: data/chroma
