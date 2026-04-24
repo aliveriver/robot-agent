@@ -1,22 +1,19 @@
 """
 capabilities/tts/kokoro_adapter.py - Kokoro WebSocket TTS 适配器
 
-这个模块封装 Kokoro WebSocket TTS 调用，负责：
-1. 向 Kokoro 服务发送文本、音色、语速和语言参数
-2. 优先兼容本地 `ws_rvc_tts` 的双帧返回协议
-3. 在双帧协议不可用时回退到通用流式 WebSocket 协议
-4. 将返回的 PCM 音频直接播放，并响应打断事件
+负责通过 WebSocket 请求 Kokoro TTS，并将返回的 PCM 音频输出到本地设备。
+这个适配器同时支持共享中断事件，用于尽快停止当前播报并清空设备缓冲：
 
-主要接口：
-- `KokoroTTS.speak(text, lang="cn", interrupt_event=None)`：合成并播放一段文本
-- `KokoroTTS.stop()`：停止当前播放
-- `get_tts()`：返回进程级 TTS 单例，供图节点或应用层复用
+1. 优先兼容 `ws_rvc_tts` 的双帧返回协议
+2. 双帧协议失败时回退到通用流式协议
+3. 播放阶段按短块检查 `interrupt_event`
+4. 中断时主动 `abort()` 输出流，尽量减少残余播报
 
-用法：
+用法:
     from src.robot_agent.capabilities.tts.kokoro_adapter import get_tts
 
     tts = get_tts()
-    await tts.speak("你好，罗比特", lang="cn")
+    await tts.speak("你好", lang="cn")
 """
 
 from __future__ import annotations
@@ -51,7 +48,7 @@ class KokoroTTS(TTSBase):
         lang: str = "cn",
         interrupt_event: threading.Event | None = None,
     ) -> None:
-        """通过 WebSocket 请求 TTS 并播放返回音频。"""
+        """请求 TTS 并播放返回音频。"""
         text = text.strip()
         if not text:
             return
@@ -66,15 +63,26 @@ class KokoroTTS(TTSBase):
         )
 
         try:
-            await self._speak_rvc_mode(text=text, lang=lang, interrupt_event=self._current_interrupt)
+            await self._speak_rvc_mode(
+                text=text,
+                lang=lang,
+                interrupt_event=self._current_interrupt,
+            )
             return
         except Exception as exc:
             logger.warning("KokoroTTS: rvc mode failed, fallback to stream mode", error=str(exc))
+        finally:
+            if self._current_interrupt and self._current_interrupt.is_set():
+                logger.info("KokoroTTS: speak interrupted")
 
-        await self._speak_stream_mode(text=text, lang=lang, interrupt_event=self._current_interrupt)
+        await self._speak_stream_mode(
+            text=text,
+            lang=lang,
+            interrupt_event=self._current_interrupt,
+        )
 
     async def stop(self) -> None:
-        """请求停止当前语音播放。"""
+        """停止当前播报。"""
         if self._current_interrupt:
             self._current_interrupt.set()
             logger.info("KokoroTTS: stopped")
@@ -88,7 +96,7 @@ class KokoroTTS(TTSBase):
         try:
             import websockets
         except ImportError as exc:
-            raise RuntimeError("未安装 websockets") from exc
+            raise RuntimeError("缺少依赖 websockets") from exc
 
         ssl_context: ssl.SSLContext | None = None
         if self._ws_url.startswith("wss://"):
@@ -109,14 +117,19 @@ class KokoroTTS(TTSBase):
                 return
 
             header = await websocket.recv()
+            if interrupt_event.is_set():
+                return
+
             pcm_data = await websocket.recv()
 
+        if interrupt_event.is_set():
+            return
         if not isinstance(header, bytes):
-            raise RuntimeError("KokoroTTS 收到的 header 不是 bytes")
+            raise RuntimeError("KokoroTTS 返回的 header 不是 bytes")
         if not isinstance(pcm_data, bytes):
-            raise RuntimeError("KokoroTTS 收到的 PCM 数据不是 bytes")
+            raise RuntimeError("KokoroTTS 返回的 PCM 不是 bytes")
         if len(header) < 28:
-            raise RuntimeError("KokoroTTS 收到的 WAV header 长度不足")
+            raise RuntimeError("KokoroTTS 返回的 WAV header 长度不合法")
 
         channels = struct.unpack("<H", header[22:24])[0]
         sample_rate = struct.unpack("<I", header[24:28])[0]
@@ -145,7 +158,7 @@ class KokoroTTS(TTSBase):
         try:
             import websockets
         except ImportError as exc:
-            raise RuntimeError("未安装 websockets") from exc
+            raise RuntimeError("缺少依赖 websockets") from exc
 
         ssl_context: ssl.SSLContext | None = None
         if self._ws_url.startswith("wss://"):
@@ -189,7 +202,7 @@ class KokoroTTS(TTSBase):
                 response = json.loads(response_raw)
 
                 if response.get("event") == "task_failed":
-                    raise RuntimeError(f"流式 TTS 失败: {response}")
+                    raise RuntimeError(f"TTS 任务失败: {response}")
 
                 data = response.get("data", {})
                 if "sample_rate" in data:
@@ -206,9 +219,12 @@ class KokoroTTS(TTSBase):
 
             await websocket.send(json.dumps({"event": "task_finish"}))
 
+        if interrupt_event.is_set():
+            return
+
         pcm_data = b"".join(pcm_chunks)
         if not pcm_data:
-            raise RuntimeError("流式 TTS 未返回音频数据")
+            raise RuntimeError("TTS 没有返回可播放的 PCM 数据")
 
         logger.info(
             "KokoroTTS: received stream audio",
@@ -235,10 +251,11 @@ class KokoroTTS(TTSBase):
         try:
             import sounddevice as sd
         except ImportError as exc:
-            raise RuntimeError("KokoroTTS 播放失败: 未安装 sounddevice") from exc
+            raise RuntimeError("KokoroTTS 播放失败: 缺少依赖 sounddevice") from exc
 
         dtype = "int16"
-        chunk_bytes = max(sample_rate // 10, 1) * max(channels, 1) * 2
+        # 以 50ms 为一个检查块，降低从识别到停播的延迟。
+        chunk_bytes = max(sample_rate // 20, 1) * max(channels, 1) * 2
 
         stream_kwargs: dict[str, Any] = {
             "samplerate": sample_rate,
@@ -250,7 +267,9 @@ class KokoroTTS(TTSBase):
         with sd.RawOutputStream(**stream_kwargs) as stream:
             for offset in range(0, len(pcm_data), chunk_bytes):
                 if interrupt_event.is_set():
-                    break
+                    stream.abort()
+                    logger.info("KokoroTTS: playback aborted")
+                    return
                 stream.write(pcm_data[offset : offset + chunk_bytes])
 
 
@@ -259,7 +278,7 @@ _tts_lock = threading.Lock()
 
 
 def get_tts() -> KokoroTTS:
-    """返回进程级 TTS 单例。"""
+    """获取进程级单例 TTS 实例。"""
     global _tts_instance
 
     if _tts_instance is not None:

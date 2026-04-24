@@ -1,18 +1,14 @@
 """
-nodes/tool_execute.py — Tool 执行节点
+nodes/tool_execute.py - Tool 执行节点
 
-职责：
-- 读取 state.tool_requests
-- 从 ToolRegistry 查找对应 Tool 实现
-- 依次执行，收集结果到 state.tool_results
+负责按顺序执行 `state.tool_requests` 中的工具，并收集两个输出：
 
-每个 Tool 返回统一结构：
-{
-    "ok": bool,
-    "tool": str,
-    "data": dict | None,
-    "error": str | None,
-}
+1. `tool_results`：工具执行结果，供后续 LLM 参考
+2. `state_updates`：工具显式要求回写到图状态的字段
+
+工具如果返回:
+    {"state_updates": {"wake_state": "sleep", "response_text": "..."}}
+则这些字段会直接写回图状态。
 """
 
 from __future__ import annotations
@@ -25,16 +21,13 @@ logger = get_logger(__name__)
 
 
 async def tool_execute(state: AgentState) -> dict:
-    """
-    Tool 执行节点（异步）。
-
-    遍历 tool_requests，逐个执行，超时或异常时记录错误而非崩溃。
-    """
+    """执行当前轮次请求的工具列表。"""
     if not state.tool_requests:
         return {}
 
     registry = ToolRegistry.get_instance()
-    results = []
+    results: list[dict] = []
+    state_updates: dict = {}
 
     for req in state.tool_requests:
         tool_name = req.get("tool", "")
@@ -43,15 +36,45 @@ async def tool_execute(state: AgentState) -> dict:
         tool_fn = registry.get(tool_name)
         if tool_fn is None:
             logger.warning("tool_execute: tool not found", tool=tool_name)
-            results.append({"ok": False, "tool": tool_name, "data": None, "error": "tool not found"})
+            results.append(
+                {
+                    "ok": False,
+                    "tool": tool_name,
+                    "data": None,
+                    "error": "tool not found",
+                }
+            )
             continue
 
         try:
             logger.info("tool_execute: running tool", tool=tool_name, args=args)
             result = await tool_fn(state=state, **args)
-            results.append({"ok": True, "tool": tool_name, "data": result, "error": None})
+
+            if isinstance(result, dict):
+                updates = result.get("state_updates", {})
+                if isinstance(updates, dict):
+                    state_updates.update(updates)
+
+            results.append(
+                {
+                    "ok": True,
+                    "tool": tool_name,
+                    "data": result,
+                    "error": None,
+                }
+            )
         except Exception as exc:
             logger.error("tool_execute: tool failed", tool=tool_name, error=str(exc))
-            results.append({"ok": False, "tool": tool_name, "data": None, "error": str(exc)})
+            results.append(
+                {
+                    "ok": False,
+                    "tool": tool_name,
+                    "data": None,
+                    "error": str(exc),
+                }
+            )
 
-    return {"tool_results": results}
+    return {
+        "tool_results": results,
+        **state_updates,
+    }

@@ -2,11 +2,11 @@
 app.py - 应用启动入口
 
 负责初始化日志、工具注册、ASR、麦克风监听与 LangGraph 主流程。
-这个模块还维护进程级运行态，确保同一次启动中的对话共享：
+这个模块还维护同一进程内的会话语义：
 
 1. 固定 `session_id`，用于多轮记忆召回
-2. 持续 `wake_state`，机器人被唤醒后保持 `awake`，
-   直到命中休眠词才切回 `sleep`
+2. 持续 `wake_state`，机器人被唤醒后保持 `awake`
+3. 共享 TTS 中断信号，支持停止词的快路径打断
 
 用法:
     python -m src.robot_agent.app
@@ -16,31 +16,21 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from concurrent.futures import Future
-from dataclasses import dataclass, field
+from concurrent.futures import CancelledError, Future
 
 from src.robot_agent.bootstrap.logging import get_logger, setup_logging
 from src.robot_agent.capabilities.asr.sherpa_adapter import SherpaRecognizer
 from src.robot_agent.capabilities.asr.text_cleaner import DuplicateFilter, extract_emotion
 from src.robot_agent.graph.agent_graph import agent_graph
+from src.robot_agent.graph.nodes.wake_guard import is_exit_text, is_stop_text
 from src.robot_agent.graph.state import AgentState
 from src.robot_agent.interfaces.audio.microphone import MicrophoneListener
+from src.robot_agent.runtime import runtime_session
 from src.robot_agent.settings import settings
 from src.robot_agent.tools.registry import ToolRegistry
 
 logger = get_logger(__name__)
 SESSION_ID = "session_" + uuid.uuid4().hex[:8]
-
-
-@dataclass
-class RuntimeSession:
-    """保存进程内持续状态，避免每轮对话都重置唤醒态。"""
-
-    wake_state: str = "sleep"
-    graph_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-
-
-runtime_session = RuntimeSession()
 
 
 async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
@@ -50,13 +40,7 @@ async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
     执行前会读取当前进程内的 `wake_state`；
     执行后会根据图返回结果回写最新 `wake_state`，
     以实现“唤醒一次后持续对话，直到休眠词出现”。
-
-    Args:
-        asr_text: 当前语音分段的识别结果
-        emotion: 从文本中提取的情绪标签
     """
-    # 用串行锁保证多段语音按到达顺序更新会话状态，
-    # 避免并发写入导致 wake_state 被旧结果覆盖。
     async with runtime_session.graph_lock:
         current_wake_state = runtime_session.wake_state
         state = AgentState(
@@ -67,6 +51,7 @@ async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
             language=settings.lang,
             emotion=emotion,
             wake_state=current_wake_state,
+            interrupt_revision=runtime_session.get_interrupt_revision(),
         )
 
         logger.info(
@@ -76,6 +61,16 @@ async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
             wake_state=current_wake_state,
         )
         result = await agent_graph.ainvoke(state)
+
+        current_revision = runtime_session.get_interrupt_revision()
+        if state.interrupt_revision != current_revision:
+            logger.info(
+                "app: stale graph result skipped after interrupt",
+                input=asr_text[:80],
+                task_revision=state.interrupt_revision,
+                current_revision=current_revision,
+            )
+            return
 
         next_wake_state = result.get("wake_state", current_wake_state)
         if next_wake_state != runtime_session.wake_state:
@@ -107,6 +102,27 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     pending_tasks: set[Future] = set()
 
+    def interrupt_tts(reason: str, text: str) -> None:
+        """
+        尽快中断当前播报，并清空仍未完成的对话任务。
+
+        这里不等待图流转到 `wake_guard`，而是在 ASR 回调拿到停止词后
+        直接触发共享中断信号，尽量缩短从识别到停播的延迟。
+        """
+        runtime_session.request_tts_interrupt()
+
+        cancelled_count = 0
+        for future in list(pending_tasks):
+            if future.cancel():
+                cancelled_count += 1
+
+        logger.info(
+            "app: tts interrupt requested",
+            reason=reason,
+            text=text[:80],
+            cancelled_tasks=cancelled_count,
+        )
+
     def on_segment(frames) -> None:
         """处理一段通过 VAD 切出的原始音频帧。"""
         try:
@@ -116,6 +132,21 @@ async def main() -> None:
             return
 
         if not raw_text:
+            return
+
+        # 停止词和休眠词走快路径，优先打断当前 TTS，
+        # 避免被 graph_lock 或后续图执行延迟。
+        if runtime_session.wake_state == "awake" and is_stop_text(raw_text, settings.lang):
+            interrupt_tts(reason="stop_word", text=raw_text)
+            return
+
+        if runtime_session.wake_state == "awake" and is_exit_text(raw_text, settings.lang):
+            runtime_session.wake_state = "sleep"
+            interrupt_tts(reason="exit_word", text=raw_text)
+            return
+
+        if runtime_session.should_ignore_self_echo(raw_text):
+            logger.info("app: probable self-echo ignored", text=raw_text[:80])
             return
 
         if duplicate_filter.is_duplicate(raw_text):
@@ -133,6 +164,8 @@ async def main() -> None:
             pending_tasks.discard(done_future)
             try:
                 done_future.result()
+            except CancelledError:
+                logger.debug("app: handle_asr_result cancelled")
             except Exception as exc:
                 logger.exception("app: handle_asr_result failed", error=str(exc))
 

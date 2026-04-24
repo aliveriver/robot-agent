@@ -79,6 +79,17 @@ class AudioSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="AUDIO_", env_file=ROOT_DIR / ".env", extra="ignore")
 
 
+class VisionSettings(BaseSettings):
+    """视觉采图配置。"""
+    camera_topic: str = "/camera/color/image_raw"
+    capture_timeout: float = 2.0
+    save_dir: str = "data/camera"
+    local_device_index: int = 0
+    prefer_ros: bool = True
+
+    model_config = SettingsConfigDict(env_prefix="VISION_", env_file=ROOT_DIR / ".env", extra="ignore")
+
+
 class WakeSettings(BaseSettings):
     """唤醒词与停止词配置（从 yaml 加载，不从 env 读取）"""
     words_cn: List[str] = ["你好罗比特", "你好，罗比特"]
@@ -125,6 +136,7 @@ class Settings(BaseSettings):
     tts: TTSSettings = Field(default_factory=TTSSettings)
     asr: ASRSettings = Field(default_factory=ASRSettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)
+    vision: VisionSettings = Field(default_factory=VisionSettings)
     wake: WakeSettings = Field(default_factory=WakeSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
@@ -152,6 +164,7 @@ class Settings(BaseSettings):
             tts=TTSSettings(**yaml_data.get("tts", {})),
             asr=ASRSettings(**yaml_data.get("asr", {})),
             audio=AudioSettings(**yaml_data.get("audio", {})),
+            vision=VisionSettings(**yaml_data.get("vision", {})),
             wake=WakeSettings(**yaml_data.get("wake", {})),
             memory=MemorySettings(**yaml_data.get("memory", {})),
             database=DatabaseSettings(**yaml_data.get("database", {})),

@@ -33,6 +33,7 @@ class AgentState(BaseModel):
 
     # ── 机器人运行状态 ────────────────────────────────────────
     wake_state: str = "sleep"     # sleep | awake
+    interrupt_revision: int = 0   # 创建该轮任务时看到的 TTS 中断版本号
     interrupted: bool = False     # 是否被用户打断
 
     # ── 记忆召回 ─────────────────────────────────────────────

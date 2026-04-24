@@ -86,3 +86,10 @@ tools:
 database:
   sqlite_path: data/robot.db
   chroma_persist_dir: data/chroma
+
+vision:
+  camera_topic: /camera/color/image_raw
+  capture_timeout: 2.0
+  save_dir: data/camera
+  local_device_index: 0
+  prefer_ros: true

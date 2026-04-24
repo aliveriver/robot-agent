@@ -1,53 +1,68 @@
 """
-nodes/scene_capture.py — 场景图像捕获节点（可选）
+scene_capture.py - 场景采图节点
 
-职责：
-- 判断是否需要图像上下文（根据输入文本关键词）
-- 若需要，从摄像头/ROS topic 获取当前帧
-- 将图像编码为 base64 存入 state
+负责在用户问题需要视觉上下文时抓取一帧图像，并写回 `state.scene_image_b64`。
+抓图结果会在后续 `response_gen` 中自动以多模态消息的形式传给 LLM。
 
-不是每次对话都需要图像，只有用户问"看到了什么""前面有什么"等才触发。
+主要接口:
+    - `scene_capture(state)`：按输入内容判断是否需要采图，并返回状态更新
 """
 
 from __future__ import annotations
 
 from src.robot_agent.bootstrap.logging import get_logger
+from src.robot_agent.capabilities.vision.ros_camera import get_camera_provider
 from src.robot_agent.graph.state import AgentState
 
 logger = get_logger(__name__)
 
-# 触发视觉捕获的关键词（可挪到 yaml 配置）
-VISUAL_KEYWORDS_CN = ["看到", "前面", "周围", "图片", "拍", "看看", "什么东西"]
-VISUAL_KEYWORDS_EN = ["see", "look", "around", "in front", "what's there", "picture", "camera"]
+VISUAL_KEYWORDS_CN = [
+    "看看",
+    "看一下",
+    "看下",
+    "前面",
+    "周围",
+    "画面",
+    "图片",
+    "镜头",
+    "摄像头",
+    "能看到",
+]
+VISUAL_KEYWORDS_EN = [
+    "see",
+    "look",
+    "around",
+    "in front",
+    "what's there",
+    "picture",
+    "camera",
+]
 
 
 def _needs_visual_context(text: str, lang: str) -> bool:
-    """简单关键词匹配，判断是否需要视觉上下文"""
+    """判断当前输入是否需要摄像头画面。"""
     keywords = VISUAL_KEYWORDS_CN if lang == "cn" else VISUAL_KEYWORDS_EN
     text_lower = text.lower()
-    return any(kw in text_lower for kw in keywords)
+    return any(keyword in text_lower for keyword in keywords)
 
 
 async def scene_capture(state: AgentState) -> dict:
     """
-    可选：捕获当前场景图像并存入 state。
+    在需要视觉上下文时抓取场景图像。
 
-    只有 _needs_visual_context 返回 True 时才触发，避免每轮都调用摄像头。
-
-    TODO: 实现真实图像采集逻辑
+    Returns:
+        dict: 成功时返回 `{"scene_image_b64": ...}`，否则返回空字典。
     """
     if not _needs_visual_context(state.normalized_text, state.language):
         logger.debug("scene_capture: skipped (no visual keywords)")
-        return {}  # 不修改 state
+        return {}
 
     logger.info("scene_capture: capturing scene image")
-
-    # TODO: image_b64 = await ros_camera.capture_base64()
-    # TODO: 或者用 cv2 直接读取摄像头帧
-    image_b64: str | None = None
+    image_b64 = await get_camera_provider().capture_base64()
 
     if image_b64 is None:
         logger.warning("scene_capture: failed to capture image")
         return {}
 
+    logger.info("scene_capture: image captured", image_bytes=len(image_b64))
     return {"scene_image_b64": image_b64}
