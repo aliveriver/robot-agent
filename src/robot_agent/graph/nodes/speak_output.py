@@ -1,39 +1,38 @@
 """
-nodes/speak_output.py — TTS 播放节点
+nodes/speak_output.py - 输出语音节点
 
-职责：
-- 读取 state.response_text
-- 调用 TTS 服务转语音
-- 播放音频（支持中断）
+这个模块是 LangGraph 中的语音输出节点，负责：
+1. 从 `AgentState.response_text` 读取模型最终回复
+2. 过滤 `__SKIP__`、`__STOP__`、`__EXIT__` 等内部控制指令
+3. 调用 TTS 适配层将文本播放为语音
 
-TTS 实现在 capabilities/tts/ 中，这里只做调用。
+主要接口：
+- `speak_output(state)`：图节点入口，读取状态并触发语音输出
+
+用法：
+    result = await speak_output(state)
+    # 节点执行完成后返回空字典，由后续节点继续处理
 """
 
 from __future__ import annotations
 
 from src.robot_agent.bootstrap.logging import get_logger
+from src.robot_agent.capabilities.tts.kokoro_adapter import get_tts
 from src.robot_agent.graph.state import AgentState
 
 logger = get_logger(__name__)
 
 
 async def speak_output(state: AgentState) -> dict:
-    """
-    TTS 播放节点（异步）。
+    """将模型回复转换为语音输出。"""
+    text = state.response_text.strip()
 
-    跳过特殊标记（__SKIP__ / __STOP__ / __EXIT__）。
-    TODO: 接入真实 TTS 服务
-    """
-    text = state.response_text
-
-    # ── 跳过内部控制标记 ─────────────────────────────────────
     if text in ("__SKIP__", "__STOP__", "__EXIT__", ""):
         logger.debug("speak_output: skipped", text=text)
         return {}
 
-    logger.info("speak_output: speaking", text=text[:40])
+    logger.info("speak_output: speaking", text=text[:80], language=state.language)
 
-    # TODO: from src.robot_agent.capabilities.tts.kokoro_adapter import KokoroTTS
-    # TODO: await tts.speak(text, lang=state.language, interrupt_event=...)
-
+    tts = get_tts()
+    await tts.speak(text, lang=state.language)
     return {}
