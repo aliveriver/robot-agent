@@ -1,0 +1,10 @@
+asr-decoder
+funasr
+online-fbank
+soundfile
+torch<=2.3.0
+torchaudio<=2.3.0
+pydub
+onnx
+onnxconverter_common
+numpy>=1.21.0,<2.0.0
