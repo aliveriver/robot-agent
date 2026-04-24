@@ -1,10 +1,13 @@
 """
-capabilities/llm/chat_model.py — LLM 聊天模型封装
+capabilities/llm/chat_model.py - LLM 聊天模型封装
 
-通过 LangChain ChatOpenAI 统一封装 LLM 调用。
-支持普通文本模型和多模态模型切换。
+统一创建 LangChain `ChatOpenAI` 实例，并根据场景选择文本模型
+或多模态模型。这个模块不负责拼装 prompt，只负责模型初始化、
+配置校验和实例缓存。
 
 用法:
+    from src.robot_agent.capabilities.llm.chat_model import get_chat_model
+
     model = get_chat_model(multimodal=False)
     reply = await model.ainvoke(messages)
 """
@@ -21,15 +24,20 @@ from src.robot_agent.settings import settings
 @lru_cache(maxsize=2)
 def get_chat_model(multimodal: bool = False) -> ChatOpenAI:
     """
-    获取 ChatOpenAI 实例（带缓存，避免重复创建）。
+    获取 ChatOpenAI 实例，并按是否多模态进行缓存。
 
     Args:
-        multimodal: True 时使用多模态模型（支持图像输入）
+        multimodal: True 时使用多模态模型，False 时使用纯文本模型。
 
     Returns:
-        ChatOpenAI 实例
+        ChatOpenAI 实例。
     """
     model_name = settings.llm.multimodal_model if multimodal else settings.llm.model
+
+    if not settings.llm.api_key:
+        raise RuntimeError("LLM 配置缺失: 请设置 LLM_API_KEY")
+    if not model_name:
+        raise RuntimeError("LLM 配置缺失: 请设置 LLM_MODEL 或 LLM_MULTIMODAL_MODEL")
 
     return ChatOpenAI(
         api_key=settings.llm.api_key,

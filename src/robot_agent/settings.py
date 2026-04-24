@@ -148,8 +148,13 @@ class Settings(BaseSettings):
             lang=app_section.get("lang", "cn"),
             log_level=app_section.get("log_level", "INFO"),
             env=app_section.get("env", "development"),
+            llm=LLMSettings(**yaml_data.get("llm", {})),
+            tts=TTSSettings(**yaml_data.get("tts", {})),
+            asr=ASRSettings(**yaml_data.get("asr", {})),
+            audio=AudioSettings(**yaml_data.get("audio", {})),
             wake=WakeSettings(**yaml_data.get("wake", {})),
             memory=MemorySettings(**yaml_data.get("memory", {})),
+            database=DatabaseSettings(**yaml_data.get("database", {})),
         )
         return instance
 
