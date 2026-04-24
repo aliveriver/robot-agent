@@ -14,7 +14,7 @@ nodes/speak_output.py - 语音播报节点
 from __future__ import annotations
 
 from src.robot_agent.bootstrap.logging import get_logger
-from src.robot_agent.capabilities.tts.kokoro_adapter import get_tts
+from src.robot_agent.capabilities.tts.minimax_adapter import get_tts
 from src.robot_agent.graph.state import AgentState
 from src.robot_agent.runtime import runtime_session
 

@@ -63,7 +63,10 @@ async def start_voice_clone(
 
     def _run_voice_clone() -> tuple[bool, str]:
         try:
-            cloner = VoiceCloner(device=input_device)
+            cloner = VoiceCloner(
+                base_url=settings.voice_clone.base_url,
+                device=input_device,
+            )
             record_ok = cloner.record_audio(str(sample_path), duration=duration)
             if not record_ok:
                 return False, "record_failed"

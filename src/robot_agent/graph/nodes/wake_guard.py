@@ -1,33 +1,23 @@
 """
 nodes/wake_guard.py - 唤醒与休眠守卫节点
 
-根据当前 `wake_state` 和输入文本判断本轮是否继续执行后续节点。
-这里直接沿用 `tianyi_v1.py` 的固定控制词，不再从配置中读取：
+根据当前 `wake_state` 和配置中的词表判断本轮是否继续执行后续节点。
+词表统一来自 `settings.wake`，不在代码中再维护第二套硬编码常量。
 
-1. 唤醒词
-   中文: `你好`、`天轶`
-   英文: `hello`、`hi`
-2. 休眠词
-   中文: `再见`、`休息`、`拜拜`
-   英文: `goodbye`、`bye`、`rest`
-3. 停止词
-   中文: `停`、`别说了`、`闭嘴`、`安静`
-   英文: `stop`、`quiet`
+主要函数:
+    - `is_wake_text(...)`：判断是否命中唤醒词
+    - `is_exit_text(...)`：判断是否命中休眠词
+    - `is_stop_text(...)`：判断是否命中打断词
+    - `wake_guard(state)`：根据输入更新 `wake_state` 或返回控制指令
 """
 
 from __future__ import annotations
 
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.graph.state import AgentState
+from src.robot_agent.settings import settings
 
 logger = get_logger(__name__)
-
-WAKE_WORDS_CN = ["你好", "天轶"]
-WAKE_WORDS_EN = ["hello", "hi"]
-EXIT_WORDS_CN = ["再见", "休息", "拜拜"]
-EXIT_WORDS_EN = ["goodbye", "bye", "rest"]
-STOP_WORDS_CN = ["停", "别说了", "闭嘴", "安静"]
-STOP_WORDS_EN = ["stop", "quiet"]
 
 
 def normalize_command_text(value: str) -> str:
@@ -44,26 +34,24 @@ def _contains_keyword(text: str, keywords: list[str]) -> bool:
 
 def is_wake_text(text: str, lang: str) -> bool:
     """判断文本是否命中唤醒词。"""
-    wake_words = WAKE_WORDS_CN if lang == "cn" else WAKE_WORDS_EN
+    wake_words = settings.wake.words_cn if lang == "cn" else settings.wake.words_en
     return _contains_keyword(text, wake_words)
 
 
 def is_exit_text(text: str, lang: str) -> bool:
     """判断文本是否命中休眠词。"""
-    exit_words = EXIT_WORDS_CN if lang == "cn" else EXIT_WORDS_EN
+    exit_words = settings.wake.exit_words_cn if lang == "cn" else settings.wake.exit_words_en
     return _contains_keyword(text, exit_words)
 
 
 def is_stop_text(text: str, lang: str) -> bool:
-    """判断文本是否命中停止词。"""
-    stop_words = STOP_WORDS_CN if lang == "cn" else STOP_WORDS_EN
+    """判断文本是否命中打断词。"""
+    stop_words = settings.wake.stop_words_cn if lang == "cn" else settings.wake.stop_words_en
     return _contains_keyword(text, stop_words)
 
 
 def wake_guard(state: AgentState) -> dict:
-    """
-    按当前唤醒态过滤输入，并决定是否切换 `wake_state`。
-    """
+    """按当前唤醒状态过滤输入，并决定是否切换 `wake_state`。"""
     text = state.normalized_text.strip().lower()
     lang = state.language
 
