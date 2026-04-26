@@ -148,6 +148,15 @@ class MemorySettings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
 
+class SentimentSettings(BaseSettings):
+    """文本情感分析模型配置。"""
+
+    enabled: bool = Field(True)
+    model_dir: str = Field("./emotion_models/roberta_base_finetuned_model_onnx")
+
+    model_config = SettingsConfigDict(extra="ignore")
+
+
 class DatabaseSettings(BaseSettings):
     """数据库与持久化目录配置。"""
 
@@ -176,6 +185,7 @@ class Settings(BaseSettings):
     voice_clone: VoiceCloneSettings = Field(default_factory=VoiceCloneSettings)
     wake: WakeSettings = Field(default_factory=WakeSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    sentiment: SentimentSettings = Field(default_factory=SentimentSettings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
 
     model_config = SettingsConfigDict(
@@ -205,6 +215,7 @@ class Settings(BaseSettings):
             voice_clone=VoiceCloneSettings(**yaml_data.get("voice_clone", {})),
             wake=WakeSettings(**yaml_data.get("wake", {})),
             memory=MemorySettings(**yaml_data.get("memory", {})),
+            sentiment=SentimentSettings(**yaml_data.get("sentiment", {})),
             database=DatabaseSettings(**yaml_data.get("database", {})),
         )
 

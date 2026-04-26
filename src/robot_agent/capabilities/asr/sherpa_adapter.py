@@ -13,6 +13,7 @@ import numpy as np
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.capabilities.asr.base import ASRBase
 from src.robot_agent.capabilities.asr.text_cleaner import clean_asr_text, extract_emotion
+from src.robot_agent.capabilities.sentiment.roberta_analyzer import get_sentiment_analyzer
 from src.robot_agent.settings import settings
 
 logger = get_logger(__name__)
@@ -100,6 +101,20 @@ class SherpaRecognizer(ASRBase):
 
         cleaned_text = clean_asr_text(raw_text)
         emotion = extract_emotion(raw_text)
+
+        # 当 SenseVoice 标签级情感为 neutral 时，尝试用 RoBERTa 文本分析补充
+        if emotion == "neutral" and settings.sentiment.enabled:
+            analyzer = get_sentiment_analyzer()
+            if analyzer.available:
+                text_emotion = analyzer.analyze(cleaned_text)
+                if text_emotion != "neutral":
+                    logger.debug(
+                        "SherpaRecognizer: RoBERTa override",
+                        tag_emotion=emotion,
+                        text_emotion=text_emotion,
+                    )
+                    emotion = text_emotion
+
         logger.info(
             "SherpaRecognizer: recognized",
             raw_text=raw_text,

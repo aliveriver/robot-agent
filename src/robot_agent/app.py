@@ -5,12 +5,14 @@ app.py - application entrypoint
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
 import uuid
 from concurrent.futures import CancelledError, Future
 
 from src.robot_agent.bootstrap.logging import get_logger, setup_logging
 from src.robot_agent.capabilities.asr.sherpa_adapter import SherpaRecognizer
-from src.robot_agent.capabilities.asr.text_cleaner import DuplicateFilter
+from src.robot_agent.capabilities.asr.text_cleaner import DuplicateFilter, is_valid_cjk_latin_text
 from src.robot_agent.graph.agent_graph import agent_graph
 from src.robot_agent.graph.nodes.wake_guard import is_exit_text, is_stop_text
 from src.robot_agent.graph.state import AgentState
@@ -21,6 +23,57 @@ from src.robot_agent.tools.registry import ToolRegistry
 
 logger = get_logger(__name__)
 SESSION_ID = "session_" + uuid.uuid4().hex[:8]
+
+
+# ---------------------------------------------------------------------------
+# PulseAudio 默认设备配置（对应 tianyi_v1.py configure_pulse_audio_devices）
+# ---------------------------------------------------------------------------
+
+def _configure_pulse_audio() -> None:
+    """在 Linux 环境中设置 PulseAudio 默认输入/输出设备。
+
+    通过环境变量 PULSE_DEFAULT_SOURCE / PULSE_DEFAULT_SINK 配置，
+    设置 DISABLE_PULSE_DEVICE_SETUP=1 可跳过。
+    """
+    if os.name != "posix":
+        return
+
+    if os.getenv("DISABLE_PULSE_DEVICE_SETUP", "").lower() in ("1", "true", "yes", "y"):
+        logger.info("app: PulseAudio device setup skipped (DISABLE_PULSE_DEVICE_SETUP)")
+        return
+
+    default_source = os.getenv(
+        "PULSE_DEFAULT_SOURCE",
+        "bluez_source.0C_9A_E6_F5_7B_14.handsfree_head_unit",
+    )
+    default_sink = os.getenv(
+        "PULSE_DEFAULT_SINK",
+        "alsa_output.usb-C-Media_Electronics_Inc._USB_Audio_Device-00.analog-stereo",
+    )
+
+    def _run_pactl(args: list[str], label: str) -> None:
+        try:
+            result = subprocess.run(
+                ["pactl", *args],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                logger.info(f"app: {label} ok", args=args)
+            else:
+                err = (result.stderr or result.stdout or "").strip()
+                logger.warning(f"app: {label} failed", args=args, error=err)
+        except FileNotFoundError:
+            logger.debug("app: pactl not found, skipping PulseAudio setup")
+        except Exception as exc:
+            logger.warning(f"app: {label} error", error=str(exc))
+
+    if default_source:
+        _run_pactl(["set-default-source", default_source], "set default source")
+    if default_sink:
+        _run_pactl(["set-default-sink", default_sink], "set default sink")
 
 
 async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
@@ -79,8 +132,20 @@ async def main() -> None:
 
     ToolRegistry.get_instance()
 
+    _configure_pulse_audio()
+
     asr = SherpaRecognizer()
     asr.initialize()
+
+    welcome_text = "你好，我是天轶机器人" if settings.lang == "cn" else "Hello, I am Tianyi robot"
+    try:
+        from src.robot_agent.capabilities.tts.minimax_adapter import get_tts
+
+        welcome_tts = get_tts()
+        await welcome_tts.speak(welcome_text, lang=settings.lang)
+        logger.info("app: welcome message played")
+    except Exception as exc:
+        logger.warning("app: welcome TTS failed, continuing startup", error=str(exc))
 
     duplicate_filter = DuplicateFilter()
     loop = asyncio.get_running_loop()
@@ -115,6 +180,10 @@ async def main() -> None:
 
         cleaned_text = recognition.cleaned_text
         if not cleaned_text:
+            return
+
+        if not is_valid_cjk_latin_text(cleaned_text):
+            logger.debug("app: non-CJK/Latin text filtered", text=cleaned_text[:80])
             return
 
         if runtime_session.wake_state == "awake" and is_stop_text(cleaned_text, settings.lang):

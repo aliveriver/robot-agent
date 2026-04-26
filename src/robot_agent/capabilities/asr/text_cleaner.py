@@ -8,6 +8,7 @@ short-window duplicate filtering logic in one place.
 from __future__ import annotations
 
 import difflib
+import re
 import time
 
 EMOJI_DICT: dict[str, str] = {
@@ -67,6 +68,17 @@ def clean_asr_text(raw_text: str) -> str:
     for tag in EMOJI_DICT:
         text = text.replace(tag, "")
     return text.strip()
+ 
+ 
+# 中英文及常用标点正则，与 tianyi_v1.py 保持一致
+_ZH_EN_PUNCT_RE = re.compile(
+    r'[\u4e00-\u9fffA-Za-z\u3000-\u303F\uFF00-\uFFEF\u2000-\u206F\u0020-\u007E]'
+)
+
+
+def is_valid_cjk_latin_text(text: str) -> bool:
+    """检查 ASR 文本是否包含有效中英文字符，过滤纯噪声识别结果。"""
+    return bool(_ZH_EN_PUNCT_RE.search(text))
 
 
 def normalize_for_match(text: str) -> str:

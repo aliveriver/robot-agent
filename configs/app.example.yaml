@@ -59,6 +59,7 @@ wake:
     - "stop"
     - "quiet"
     - "robit stop"
+    - "shut up"
 
 # ── Memory ───────────────────────────────────────────────────
 memory:
@@ -86,6 +87,10 @@ tools:
 database:
   sqlite_path: data/robot.db
   chroma_persist_dir: data/chroma
+
+sentiment:
+  enabled: true
+  model_dir: ./emotion_models/roberta_base_finetuned_model_onnx
 
 vision:
   camera_topic: /camera/color/image_raw
