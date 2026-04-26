@@ -1,15 +1,5 @@
 """
-app.py - 应用启动入口
-
-负责初始化日志、工具注册、ASR、麦克风监听与 LangGraph 主流程。
-这个模块还维护同一进程内的会话语义：
-
-1. 固定 `session_id`，用于多轮记忆召回
-2. 持续 `wake_state`，机器人被唤醒后保持 `awake`
-3. 共享 TTS 中断信号，支持停止词的快路径打断
-
-用法:
-    python -m src.robot_agent.app
+app.py - application entrypoint
 """
 
 from __future__ import annotations
@@ -20,7 +10,7 @@ from concurrent.futures import CancelledError, Future
 
 from src.robot_agent.bootstrap.logging import get_logger, setup_logging
 from src.robot_agent.capabilities.asr.sherpa_adapter import SherpaRecognizer
-from src.robot_agent.capabilities.asr.text_cleaner import DuplicateFilter, extract_emotion
+from src.robot_agent.capabilities.asr.text_cleaner import DuplicateFilter
 from src.robot_agent.graph.agent_graph import agent_graph
 from src.robot_agent.graph.nodes.wake_guard import is_exit_text, is_stop_text
 from src.robot_agent.graph.state import AgentState
@@ -34,13 +24,7 @@ SESSION_ID = "session_" + uuid.uuid4().hex[:8]
 
 
 async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
-    """
-    处理一段 ASR 文本，并将其送入 AgentGraph。
-
-    执行前会读取当前进程内的 `wake_state`；
-    执行后会根据图返回结果回写最新 `wake_state`，
-    以实现“唤醒一次后持续对话，直到休眠词出现”。
-    """
+    """Push one ASR result through the graph and persist wake-state changes."""
     async with runtime_session.graph_lock:
         current_wake_state = runtime_session.wake_state
         state = AgentState(
@@ -89,7 +73,7 @@ async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
 
 
 async def main() -> None:
-    """启动应用主循环，并持续监听麦克风语音分段。"""
+    """Start the robot runtime and keep listening for microphone segments."""
     setup_logging()
     logger.info("robot-agent: starting", lang=settings.lang, env=settings.env)
 
@@ -103,12 +87,7 @@ async def main() -> None:
     pending_tasks: set[Future] = set()
 
     def interrupt_tts(reason: str, text: str) -> None:
-        """
-        尽快中断当前播报，并清空仍未完成的对话任务。
-
-        这里不等待图流转到 `wake_guard`，而是在 ASR 回调拿到停止词后
-        直接触发共享中断信号，尽量缩短从识别到停播的延迟。
-        """
+        """Interrupt current speech as quickly as possible."""
         runtime_session.request_tts_interrupt()
 
         cancelled_count = 0
@@ -124,38 +103,39 @@ async def main() -> None:
         )
 
     def on_segment(frames) -> None:
-        """处理一段通过 VAD 切出的原始音频帧。"""
+        """Handle one VAD audio segment."""
         try:
-            raw_text = asr.recognize(frames)
+            recognition = asr.recognize_with_metadata(frames)
         except Exception as exc:
             logger.exception("app: ASR failed", error=str(exc))
             return
 
-        if not raw_text:
+        if not recognition:
             return
 
-        # 停止词和休眠词走快路径，优先打断当前 TTS，
-        # 避免被 graph_lock 或后续图执行延迟。
-        if runtime_session.wake_state == "awake" and is_stop_text(raw_text, settings.lang):
-            interrupt_tts(reason="stop_word", text=raw_text)
+        cleaned_text = recognition.cleaned_text
+        if not cleaned_text:
             return
 
-        if runtime_session.wake_state == "awake" and is_exit_text(raw_text, settings.lang):
+        if runtime_session.wake_state == "awake" and is_stop_text(cleaned_text, settings.lang):
+            interrupt_tts(reason="stop_word", text=cleaned_text)
+            return
+
+        if runtime_session.wake_state == "awake" and is_exit_text(cleaned_text, settings.lang):
             runtime_session.wake_state = "sleep"
-            interrupt_tts(reason="exit_word", text=raw_text)
+            interrupt_tts(reason="exit_word", text=cleaned_text)
             return
 
-        if runtime_session.should_ignore_self_echo(raw_text):
-            logger.info("app: probable self-echo ignored", text=raw_text[:80])
+        if runtime_session.should_ignore_self_echo(cleaned_text):
+            logger.info("app: probable self-echo ignored", text=cleaned_text[:80])
             return
 
-        if duplicate_filter.is_duplicate(raw_text):
-            logger.debug("app: duplicate ASR text skipped", text=raw_text)
+        if duplicate_filter.is_duplicate(cleaned_text):
+            logger.debug("app: duplicate ASR text skipped", text=cleaned_text)
             return
 
-        emotion = extract_emotion(raw_text)
         future = asyncio.run_coroutine_threadsafe(
-            handle_asr_result(raw_text, emotion=emotion),
+            handle_asr_result(cleaned_text, emotion=recognition.emotion),
             loop,
         )
         pending_tasks.add(future)

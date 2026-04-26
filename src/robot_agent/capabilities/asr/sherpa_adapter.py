@@ -1,26 +1,10 @@
 """
-capabilities/asr/sherpa_adapter.py - Sherpa-ONNX 识别适配器
-
-这个模块封装 Sherpa SenseVoice 的离线识别能力，负责：
-1. 根据配置加载 `model.onnx` / `model_quant.onnx` 和 `tokens.txt`
-2. 将外部传入的音频帧拼接为 Sherpa 可消费的 `float32` 波形
-3. 执行识别，并对结果做基础文本清洗
-
-主要接口：
-- `SherpaRecognizer.initialize()`：初始化识别器，通常在应用启动时调用一次
-- `SherpaRecognizer.recognize(audio_frames)`：识别一段音频帧，返回清洗后的文本
-- `SherpaRecognizer.get_language()`：返回当前识别语言
-
-用法：
-    from src.robot_agent.capabilities.asr.sherpa_adapter import SherpaRecognizer
-
-    asr = SherpaRecognizer()
-    asr.initialize()
-    text = asr.recognize(audio_frames)
+capabilities/asr/sherpa_adapter.py - Sherpa-ONNX recognizer adapter
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,14 +12,23 @@ import numpy as np
 
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.capabilities.asr.base import ASRBase
-from src.robot_agent.capabilities.asr.text_cleaner import clean_asr_text
+from src.robot_agent.capabilities.asr.text_cleaner import clean_asr_text, extract_emotion
 from src.robot_agent.settings import settings
 
 logger = get_logger(__name__)
 
 
+@dataclass
+class ASRRecognition:
+    """One ASR recognition result with raw tags preserved."""
+
+    raw_text: str
+    cleaned_text: str
+    emotion: str
+
+
 class SherpaRecognizer(ASRBase):
-    """Sherpa-ONNX 离线 ASR 适配器。"""
+    """Sherpa-ONNX offline ASR adapter."""
 
     def __init__(self) -> None:
         self._recognizer: Any | None = None
@@ -44,7 +37,7 @@ class SherpaRecognizer(ASRBase):
         self._initialized = False
 
     def initialize(self) -> None:
-        """加载 Sherpa SenseVoice 模型。"""
+        """Load the Sherpa SenseVoice model."""
         if self._initialized:
             return
 
@@ -67,9 +60,7 @@ class SherpaRecognizer(ASRBase):
                 num_threads=1,
             )
         except Exception as exc:
-            raise RuntimeError(
-                f"SherpaRecognizer 初始化失败: {exc}"
-            ) from exc
+            raise RuntimeError(f"SherpaRecognizer 初始化失败: {exc}") from exc
 
         self._initialized = True
         logger.info(
@@ -80,13 +71,18 @@ class SherpaRecognizer(ASRBase):
         )
 
     def recognize(self, audio_frames: list) -> str:
-        """识别一段音频帧并返回清洗后的文本。"""
+        """Return the cleaned ASR text for compatibility with the base interface."""
+        result = self.recognize_with_metadata(audio_frames)
+        return result.cleaned_text if result else ""
+
+    def recognize_with_metadata(self, audio_frames: list) -> ASRRecognition | None:
+        """Return raw text, cleaned text, and extracted emotion in one pass."""
         if not self._initialized:
             self.initialize()
 
         audio_data = self._merge_audio_frames(audio_frames)
         if audio_data.size == 0:
-            return ""
+            return None
 
         assert self._recognizer is not None
 
@@ -97,21 +93,27 @@ class SherpaRecognizer(ASRBase):
             raw_text = stream.result.text.strip()
         except Exception as exc:
             logger.exception("SherpaRecognizer: recognize failed", error=str(exc))
-            return ""
+            return None
 
         if not raw_text:
-            return ""
+            return None
 
         cleaned_text = clean_asr_text(raw_text)
+        emotion = extract_emotion(raw_text)
         logger.info(
             "SherpaRecognizer: recognized",
             raw_text=raw_text,
             cleaned_text=cleaned_text,
+            emotion=emotion,
         )
-        return cleaned_text
+        return ASRRecognition(
+            raw_text=raw_text,
+            cleaned_text=cleaned_text,
+            emotion=emotion,
+        )
 
     def get_language(self) -> str:
-        """返回识别语言。"""
+        """Return the configured ASR language."""
         return self._language
 
     def _resolve_model_path(self) -> Path:

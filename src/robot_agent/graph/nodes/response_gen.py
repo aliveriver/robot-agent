@@ -1,14 +1,8 @@
 """
-nodes/response_gen.py - 回复生成节点
+nodes/response_gen.py - Response generation node
 
-负责将当前轮状态组织为 LLM 输入，并生成最终回复。
-支持两种路径：
-
-1. 常规文本回复
-2. 带图像输入的多模态回复
-
-如果前面的工具已经明确给出了 `response_text`，这里会直接复用，
-不再额外调用 LLM。
+Generates the final assistant reply. If the LLM path fails, this node falls
+back to a short emotion-aware fixed response so the robot still speaks.
 """
 
 from __future__ import annotations
@@ -27,9 +21,35 @@ logger = get_logger(__name__)
 
 PROMPT_DIR = Path(__file__).resolve().parents[5] / "configs" / "prompts"
 
+FALLBACK_RESPONSES: dict[str, dict[str, str]] = {
+    "cn": {
+        "happy": "听起来很不错。",
+        "sad": "我在这儿，你可以继续说。",
+        "angry": "先别着急，我们慢慢说。",
+        "neutral": "收到，你继续说。",
+        "fearful": "别怕，我在这儿。",
+        "disgusted": "明白了，这确实让人不舒服。",
+        "surprised": "哇，这还真有点意外。",
+    },
+    "en": {
+        "happy": "That sounds nice.",
+        "sad": "I'm here. You can keep talking.",
+        "angry": "Let's slow down and talk it through.",
+        "neutral": "Got it. Please go on.",
+        "fearful": "It's okay. I'm here with you.",
+        "disgusted": "I understand. That does sound unpleasant.",
+        "surprised": "Wow, that is surprising.",
+    },
+}
+
+GENERIC_FALLBACK: dict[str, str] = {
+    "cn": "抱歉，我刚刚没连上大模型，但我还在。你可以再说一遍。",
+    "en": "Sorry, I could not reach the model just now, but I'm still here. Please say it again.",
+}
+
 
 def _load_prompt(filename: str) -> str:
-    """加载 prompt 文件；若不存在则返回空串。"""
+    """Load a prompt file; return an empty string if it is missing."""
     path = PROMPT_DIR / filename
     if not path.exists():
         logger.warning("response_gen: prompt file not found", path=str(path))
@@ -38,7 +58,7 @@ def _load_prompt(filename: str) -> str:
 
 
 def _build_context_block(state: AgentState) -> str:
-    """整理最近对话、记忆、知识库和工具结果。"""
+    """Build recent context for the LLM."""
     parts: list[str] = []
 
     if state.recent_messages:
@@ -76,7 +96,7 @@ def _build_context_block(state: AgentState) -> str:
 
 
 def _build_user_message(state: AgentState, context: str) -> str:
-    """构建发给模型的用户消息。"""
+    """Build the user message passed to the model."""
     parts: list[str] = []
 
     if context:
@@ -91,7 +111,7 @@ def _build_user_message(state: AgentState, context: str) -> str:
 
 
 def _build_messages(state: AgentState, system_prompt: str, user_message: str) -> list[Any]:
-    """构造 LangChain 消息列表。"""
+    """Build LangChain messages for text or multimodal generation."""
     messages: list[Any] = [SystemMessage(content=system_prompt)]
 
     if state.scene_image_b64:
@@ -115,7 +135,7 @@ def _build_messages(state: AgentState, system_prompt: str, user_message: str) ->
 
 
 def _extract_response_text(reply: Any) -> str:
-    """从 LangChain 返回对象中提取文本内容。"""
+    """Extract plain text from a LangChain reply object."""
     content = getattr(reply, "content", "")
     if isinstance(content, str):
         return content.strip()
@@ -135,8 +155,23 @@ def _extract_response_text(reply: Any) -> str:
     return str(content).strip()
 
 
+def _emotion_fallback_text(language: str, emotion: str | None) -> str:
+    """Return a short deterministic fallback line based on emotion."""
+    lang = language if language in FALLBACK_RESPONSES else "cn"
+    emotion_key = emotion or "neutral"
+    lang_map = FALLBACK_RESPONSES[lang]
+    return lang_map.get(emotion_key, lang_map["neutral"])
+
+
+def _llm_failure_fallback(state: AgentState) -> str:
+    """Return the safest fallback response when model generation fails."""
+    base = _emotion_fallback_text(state.language, state.emotion)
+    generic = GENERIC_FALLBACK.get(state.language, GENERIC_FALLBACK["cn"])
+    return f"{base} {generic}"
+
+
 async def response_gen(state: AgentState) -> dict:
-    """生成最终回复文本。"""
+    """Generate the final response text."""
     if state.response_text and state.response_text not in {"__SKIP__", "__STOP__", "__EXIT__"}:
         logger.info("response_gen: using prebuilt response", length=len(state.response_text))
         return {
@@ -161,22 +196,44 @@ async def response_gen(state: AgentState) -> dict:
         context_len=len(context),
     )
 
-    model = get_chat_model(multimodal=has_image)
-    messages = _build_messages(state, system_prompt, user_message)
-    reply = await model.ainvoke(messages)
-    response_text = _extract_response_text(reply)
+    try:
+        model = get_chat_model(multimodal=has_image)
+        messages = _build_messages(state, system_prompt, user_message)
+        reply = await model.ainvoke(messages)
+        response_text = _extract_response_text(reply)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "response_gen: model generation failed, using fallback",
+            error=str(exc),
+            has_image=has_image,
+            emotion=state.emotion or "neutral",
+        )
+        fallback_text = _llm_failure_fallback(state)
+        return {
+            "response_text": fallback_text,
+            "response_meta": {
+                "source": "fallback",
+                "reason": "llm_error",
+                "multimodal": has_image,
+            },
+        }
 
     if not response_text:
-        response_text = (
-            "抱歉，我现在没有生成有效回复。"
-            if lang == "cn"
-            else "Sorry, I could not generate a valid reply."
+        logger.warning(
+            "response_gen: empty model response, using fallback",
+            has_image=has_image,
+            emotion=state.emotion or "neutral",
         )
+        response_text = _llm_failure_fallback(state)
+        source = "fallback"
+    else:
+        source = "llm"
 
-    logger.info("response_gen: reply generated", length=len(response_text))
+    logger.info("response_gen: reply generated", length=len(response_text), source=source)
     return {
         "response_text": response_text,
         "response_meta": {
+            "source": source,
             "model": getattr(model, "model_name", None),
             "multimodal": has_image,
         },
