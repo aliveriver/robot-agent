@@ -105,6 +105,7 @@ class VisionSettings(BaseSettings):
     save_dir: str = Field(...)
     local_device_index: int = Field(...)
     prefer_ros: bool = Field(...)
+    always_capture: bool = Field(True)
     auto_start_node: bool = Field(False)
     launch_command: str = Field("")
     launch_cwd: str = Field("")

@@ -13,6 +13,7 @@ from __future__ import annotations
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.capabilities.vision.ros_camera import get_camera_provider
 from src.robot_agent.graph.state import AgentState
+from src.robot_agent.settings import settings
 
 logger = get_logger(__name__)
 
@@ -53,11 +54,18 @@ async def scene_capture(state: AgentState) -> dict:
     Returns:
         dict: 成功时返回 `{"scene_image_b64": ...}`，否则返回空字典。
     """
-    if not _needs_visual_context(state.normalized_text, state.language):
-        logger.debug("scene_capture: skipped (no visual keywords)")
+    should_capture = settings.vision.always_capture or _needs_visual_context(
+        state.normalized_text,
+        state.language,
+    )
+    if not should_capture:
+        logger.debug("scene_capture: skipped (always_capture disabled and no visual keywords)")
         return {}
 
-    logger.info("scene_capture: capturing scene image")
+    logger.info(
+        "scene_capture: capturing scene image",
+        always_capture=settings.vision.always_capture,
+    )
     image_b64 = await get_camera_provider().capture_base64()
 
     if image_b64 is None:
