@@ -4,3 +4,9 @@ data/
 
 configs/app.yaml
 configs/app copy.yaml
+
+# Python bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
