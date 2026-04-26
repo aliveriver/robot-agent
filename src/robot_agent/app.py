@@ -1,5 +1,5 @@
 """
-app.py - application entrypoint
+app.py - 应用程序入口点
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ SESSION_ID = "session_" + uuid.uuid4().hex[:8]
 
 
 def _configure_pulse_audio() -> None:
-    """Configure PulseAudio defaults on Linux when pactl is available."""
+    """如果 pactl 可用，在 Linux 上配置 PulseAudio 默认设置。"""
     if os.name != "posix":
         return
 
@@ -74,7 +74,7 @@ def _configure_pulse_audio() -> None:
 
 
 def _configure_audio_devices() -> tuple[int | None, int | None]:
-    """Resolve cross-machine audio devices and apply sounddevice defaults."""
+    """解析跨机器的音频设备并应用 sounddevice 默认值。"""
     try:
         import sounddevice as sd
     except ImportError:
@@ -101,7 +101,7 @@ def _configure_audio_devices() -> tuple[int | None, int | None]:
 
 
 async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
-    """Push one ASR result through the graph and persist wake-state changes."""
+    """将 ASR 结果推送到图中，并持久化唤醒状态的更改。"""
     async with runtime_session.graph_lock:
         current_wake_state = runtime_session.wake_state
         state = AgentState(
@@ -150,7 +150,7 @@ async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
 
 
 async def main() -> None:
-    """Start the robot runtime and keep listening for microphone segments."""
+    """启动机器人运行时并持续监听麦克风分段。"""
     setup_logging()
     logger.info("robot-agent: starting", lang=settings.lang, env=settings.env)
 
@@ -183,7 +183,7 @@ async def main() -> None:
         loop = asyncio.get_running_loop()
 
         def interrupt_tts(reason: str, text: str) -> None:
-            """Interrupt current speech as quickly as possible."""
+            """尽可能快地中断当前语音。"""
             runtime_session.request_tts_interrupt()
 
             cancelled_count = 0
@@ -199,7 +199,7 @@ async def main() -> None:
             )
 
         def on_segment(frames) -> None:
-            """Handle one VAD audio segment."""
+            """处理一个 VAD 音频分段。"""
             try:
                 recognition = asr.recognize_with_metadata(frames)
             except Exception as exc:
@@ -266,13 +266,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logger.info("robot-agent: stopped by keyboard interrupt")
+        logger.info("robot-agent: 用户中断执行 (KeyboardInterrupt)")
         for future in list(pending_tasks):
             future.cancel()
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("robot-agent: stopped by keyboard interrupt")

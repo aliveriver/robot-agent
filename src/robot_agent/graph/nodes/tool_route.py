@@ -86,9 +86,9 @@ async def tool_route(state: AgentState) -> dict:
     tool_schemas = registry.get_tool_schemas()
 
     system_prompt = (
-        "You are a conservative tool router for a voice robot. "
-        "Only call a tool when the user's request clearly needs a tool action. "
-        "If normal conversation is sufficient, do not call any tool."
+        "你是一个为语音机器人服务的保守型工具路由。 "
+        "只有当用户的请求明确需要工具操作时才调用工具。 "
+        "如果正常的对话已经足够，请不要调用任何工具。"
     )
     messages = [
         SystemMessage(content=system_prompt),

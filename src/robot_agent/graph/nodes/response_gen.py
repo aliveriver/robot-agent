@@ -1,8 +1,8 @@
 """
-nodes/response_gen.py - Response generation node
+nodes/response_gen.py - 响应生成节点
 
-Generates the final assistant reply. If the LLM path fails, this node falls
-back to a short emotion-aware fixed response so the robot still speaks.
+生成最终的助手回复。如果 LLM 路径失败，此节点将回退到
+简短的、感知情绪的固定回复，以便机器人仍能发声。
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ GENERIC_FALLBACK: dict[str, str] = {
 
 
 def _load_prompt(filename: str) -> str:
-    """Load a prompt file; return an empty string if it is missing."""
+    """加载 prompt 文件；如果文件缺失则返回空字符串。"""
     path = PROMPT_DIR / filename
     if not path.exists():
         logger.warning("response_gen: prompt file not found", path=str(path))
@@ -58,7 +58,7 @@ def _load_prompt(filename: str) -> str:
 
 
 def _build_context_block(state: AgentState) -> str:
-    """Build recent context for the LLM."""
+    """为 LLM 构建最近的上下文。"""
     parts: list[str] = []
 
     if state.recent_messages:
@@ -96,7 +96,7 @@ def _build_context_block(state: AgentState) -> str:
 
 
 def _build_user_message(state: AgentState, context: str) -> str:
-    """Build the user message passed to the model."""
+    """构建传递给 model 的 user 消息。"""
     parts: list[str] = []
 
     if context:
@@ -111,7 +111,7 @@ def _build_user_message(state: AgentState, context: str) -> str:
 
 
 def _build_messages(state: AgentState, system_prompt: str, user_message: str) -> list[Any]:
-    """Build LangChain messages for text or multimodal generation."""
+    """为文本或多模态生成构建 LangChain 消息。"""
     messages: list[Any] = [SystemMessage(content=system_prompt)]
 
     if state.scene_image_b64:
@@ -135,7 +135,7 @@ def _build_messages(state: AgentState, system_prompt: str, user_message: str) ->
 
 
 def _extract_response_text(reply: Any) -> str:
-    """Extract plain text from a LangChain reply object."""
+    """从 LangChain reply 对象中提取纯文本。"""
     content = getattr(reply, "content", "")
     if isinstance(content, str):
         return content.strip()
@@ -156,7 +156,7 @@ def _extract_response_text(reply: Any) -> str:
 
 
 def _emotion_fallback_text(language: str, emotion: str | None) -> str:
-    """Return a short deterministic fallback line based on emotion."""
+    """根据情绪返回简短的备用 fallback 语句。"""
     lang = language if language in FALLBACK_RESPONSES else "cn"
     emotion_key = emotion or "neutral"
     lang_map = FALLBACK_RESPONSES[lang]
@@ -164,14 +164,14 @@ def _emotion_fallback_text(language: str, emotion: str | None) -> str:
 
 
 def _llm_failure_fallback(state: AgentState) -> str:
-    """Return the safest fallback response when model generation fails."""
+    """当模型生成失败时，返回最安全的 fallback 响应。"""
     base = _emotion_fallback_text(state.language, state.emotion)
     generic = GENERIC_FALLBACK.get(state.language, GENERIC_FALLBACK["cn"])
     return f"{base} {generic}"
 
 
 async def response_gen(state: AgentState) -> dict:
-    """Generate the final response text."""
+    """生成最终的一般响应文本。"""
     if state.response_text and state.response_text not in {"__SKIP__", "__STOP__", "__EXIT__"}:
         logger.info("response_gen: using prebuilt response", length=len(state.response_text))
         return {

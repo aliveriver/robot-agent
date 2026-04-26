@@ -56,7 +56,7 @@ class ToolRegistry:
         self.register(
             "get_time",
             get_time,
-            description="Get the current local time of the robot.",
+            description="获取机器人当前的本地时间。",
             parameters={
                 "type": "object",
                 "properties": {},
@@ -66,7 +66,7 @@ class ToolRegistry:
         self.register(
             "get_robot_status",
             get_robot_status,
-            description="Get the robot runtime status, including wake state.",
+            description="获取机器人运行状态，包括唤醒状态。",
             parameters={
                 "type": "object",
                 "properties": {},
@@ -76,13 +76,13 @@ class ToolRegistry:
         self.register(
             "search_memory",
             search_memory,
-            description="Search stored memories relevant to the user's query.",
+            description="搜索与用户查询相关的存储记忆。",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "The memory search query.",
+                        "description": "记忆搜索查询词。",
                     }
                 },
                 "required": ["query"],
@@ -92,13 +92,13 @@ class ToolRegistry:
         self.register(
             "save_profile_fact",
             save_profile_fact,
-            description="Save a stable user profile fact into long-term memory.",
+            description="将稳定的用户特征事实保存到长期记忆中。",
             parameters={
                 "type": "object",
                 "properties": {
                     "fact": {
                         "type": "string",
-                        "description": "The user profile fact to save.",
+                        "description": "要保存的用户特征事实。",
                     }
                 },
                 "required": ["fact"],
@@ -108,13 +108,13 @@ class ToolRegistry:
         self.register(
             "sleep_robot",
             sleep_robot,
-            description="Put the robot into sleep mode when the user explicitly asks it to rest.",
+            description="当用户明确要求休息时，使机器人进入休眠模式。",
             parameters={
                 "type": "object",
                 "properties": {
                     "reason": {
                         "type": "string",
-                        "description": "Why the robot is being put to sleep.",
+                        "description": "机器人进入休眠的原因。",
                     }
                 },
                 "additionalProperties": False,
@@ -123,13 +123,13 @@ class ToolRegistry:
         self.register(
             "start_voice_clone",
             start_voice_clone,
-            description="Start the voice cloning flow by recording and uploading a voice sample.",
+            description="通过录制并上传语音样本开始声音克隆流程。",
             parameters={
                 "type": "object",
                 "properties": {
                     "duration": {
                         "type": "integer",
-                        "description": "Recording duration in seconds.",
+                        "description": "录音时长（秒）。",
                         "minimum": 3,
                         "maximum": 30,
                     }

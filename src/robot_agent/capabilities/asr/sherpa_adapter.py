@@ -1,5 +1,5 @@
 """
-capabilities/asr/sherpa_adapter.py - Sherpa-ONNX recognizer adapter
+capabilities/asr/sherpa_adapter.py - Sherpa-ONNX 识别器适配器
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class ASRRecognition:
-    """One ASR recognition result with raw tags preserved."""
+    """一次 ASR 识别结果，保留原始标签。"""
 
     raw_text: str
     cleaned_text: str
@@ -29,7 +29,7 @@ class ASRRecognition:
 
 
 class SherpaRecognizer(ASRBase):
-    """Sherpa-ONNX offline ASR adapter."""
+    """Sherpa-ONNX 离线 ASR 适配器。"""
 
     def __init__(self) -> None:
         self._recognizer: Any | None = None
@@ -38,7 +38,7 @@ class SherpaRecognizer(ASRBase):
         self._initialized = False
 
     def initialize(self) -> None:
-        """Load the Sherpa SenseVoice model."""
+        """加载 Sherpa SenseVoice 模型。"""
         if self._initialized:
             return
 
@@ -72,12 +72,12 @@ class SherpaRecognizer(ASRBase):
         )
 
     def recognize(self, audio_frames: list) -> str:
-        """Return the cleaned ASR text for compatibility with the base interface."""
+        """返回清理后的 ASR 文本，以便与基础接口兼容。"""
         result = self.recognize_with_metadata(audio_frames)
         return result.cleaned_text if result else ""
 
     def recognize_with_metadata(self, audio_frames: list) -> ASRRecognition | None:
-        """Return raw text, cleaned text, and extracted emotion in one pass."""
+        """一次性返回原始文本、清理后的文本和提取的情绪。"""
         if not self._initialized:
             self.initialize()
 
@@ -128,7 +128,7 @@ class SherpaRecognizer(ASRBase):
         )
 
     def get_language(self) -> str:
-        """Return the configured ASR language."""
+        """返回配置的 ASR 语言。"""
         return self._language
 
     def _resolve_model_path(self) -> Path:

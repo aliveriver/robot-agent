@@ -1,4 +1,4 @@
-"""Audio device discovery and resolution helpers."""
+"""音频设备发现和解析辅助工具。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ def _get_sounddevice():
     try:
         import sounddevice as sd
     except ImportError as exc:  # noqa: BLE001
-        raise RuntimeError("sounddevice is required for audio device discovery") from exc
+        raise RuntimeError("音频设备发现需要安装 sounddevice") from exc
     return sd
 
 
@@ -22,7 +22,7 @@ def _channel_key(kind: str) -> str:
 
 
 def device_label(device_index: int | str | None) -> str:
-    """Return a readable label for one device."""
+    """返回单个设备的可读标签。"""
     if device_index is None:
         return "None"
 
@@ -46,12 +46,12 @@ def device_label(device_index: int | str | None) -> str:
 
 
 def list_audio_devices() -> str:
-    """Return a formatted audio device list for logging."""
+    """返回用于日志记录的格式化音频设备列表。"""
     try:
         sd = _get_sounddevice()
         devices = sd.query_devices()
     except Exception as exc:  # noqa: BLE001
-        return f"(audio devices unavailable: {exc})"
+        return f"(音频设备不可用: {exc})"
 
     lines: list[str] = []
     for index, info in enumerate(devices):
@@ -63,16 +63,16 @@ def list_audio_devices() -> str:
             f"[{index}] {info.get('name', 'unknown')} "
             f"(in={in_ch}, out={out_ch}, hostapi={info.get('hostapi')})"
         )
-    return "\n".join(lines) if lines else "(no audio devices found)"
+    return "\n".join(lines) if lines else "(未找到音频设备)"
 
 
 def resolve_device(preferred: int | str | None, kind: str) -> int | None:
-    """Resolve one preferred device by index, exact name, or partial name."""
+    """通过索引、精确名称或部分名称解析一个首选设备。"""
     try:
         sd = _get_sounddevice()
         devices = sd.query_devices()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("audio_device: query failed during resolution", error=str(exc))
+        logger.warning("audio_device: 解析过程中查询失败", error=str(exc))
         return None
 
     channel_key = _channel_key(kind)
@@ -117,12 +117,12 @@ def resolve_device(preferred: int | str | None, kind: str) -> int | None:
 
 
 def first_supported_device(kind: str, exclude: int | None = None) -> int | None:
-    """Return the first device that supports the requested direction."""
+    """返回支持所请求方向的第一个设备。"""
     try:
         sd = _get_sounddevice()
         devices = sd.query_devices()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("audio_device: query failed while finding first supported device", error=str(exc))
+        logger.warning("audio_device: 寻找第一个支持的设备时查询失败", error=str(exc))
         return None
 
     channel_key = _channel_key(kind)
@@ -135,12 +135,12 @@ def first_supported_device(kind: str, exclude: int | None = None) -> int | None:
 
 
 def preferred_output_device(exclude: int | None = None) -> int | None:
-    """Pick a likely speaker-like output device when multiple are available."""
+    """当有多个可用设备时，选择一个可能是扬声器的输出设备。"""
     try:
         sd = _get_sounddevice()
         devices = sd.query_devices()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("audio_device: query failed while picking preferred output", error=str(exc))
+        logger.warning("audio_device: 选择首选输出时查询失败", error=str(exc))
         return None
 
     ranked_keywords = [
@@ -182,12 +182,12 @@ def resolve_audio_devices(
     output_preference: int | str | None = None,
     allow_shared_device: bool = True,
 ) -> tuple[int | None, int | None]:
-    """Resolve input and output devices with cross-machine fallbacks."""
+    """解析具有跨机器回退机制的输入和输出设备。"""
     try:
         sd = _get_sounddevice()
         default_in, default_out = sd.default.device
     except Exception as exc:  # noqa: BLE001
-        logger.warning("audio_device: failed to read default devices", error=str(exc))
+        logger.warning("audio_device: 读取默认设备失败", error=str(exc))
         default_in, default_out = None, None
 
     input_device = default_in
@@ -218,7 +218,7 @@ def resolve_audio_devices(
 
 
 def resolve_input_device(preferred: int | str | None = None) -> int | None:
-    """Resolve one input device preference."""
+    """解析一个首选输入设备。"""
     resolved_input, _ = resolve_audio_devices(input_preference=preferred)
     return resolved_input
 
@@ -228,7 +228,7 @@ def resolve_output_device(
     exclude_input: int | None = None,
     allow_shared_device: bool = True,
 ) -> int | None:
-    """Resolve one output device preference."""
+    """解析一个首选输出设备。"""
     if preferred not in (None, ""):
         resolved = resolve_device(preferred, "output")
         if resolved is not None:
@@ -246,7 +246,7 @@ def resolve_output_device(
 
 
 def log_audio_device_selection(input_device: Any, output_device: Any) -> None:
-    """Log the resolved audio devices and current visible inventory."""
+    """记录解析后的音频设备和当前可见的库存。"""
     logger.info(
         "audio_device: resolved devices",
         input_device=input_device,

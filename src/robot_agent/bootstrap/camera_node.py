@@ -1,4 +1,4 @@
-"""Background camera node launcher."""
+"""后台相机节点启动器。"""
 
 from __future__ import annotations
 
@@ -14,12 +14,13 @@ logger = get_logger(__name__)
 
 
 class CameraNodeLauncher:
-    """Start and stop the external ROS camera node when configured."""
+    """在配置后启动和停止外部 ROS 相机节点。"""
 
     def __init__(self) -> None:
         self._process: subprocess.Popen[bytes] | None = None
 
     def start(self) -> None:
+        """启动相机节点。"""
         vision_cfg = settings.vision
 
         if not vision_cfg.auto_start_node:
@@ -61,6 +62,7 @@ class CameraNodeLauncher:
             logger.warning("camera_node: start failed", error=str(exc), cwd=cwd)
 
     def stop(self) -> None:
+        """停止相机节点。"""
         process = self._process
         if process is None:
             return

@@ -1,8 +1,8 @@
 """
-capabilities/asr/text_cleaner.py - ASR text cleaning helpers
+capabilities/asr/text_cleaner.py - ASR 文本清洗辅助工具
 
-This module keeps the old SenseVoice tag cleanup, self-echo detection, and
-short-window duplicate filtering logic in one place.
+此模块将旧的 SenseVoice 标签清理、自身回声(self-echo)检测
+以及短时间窗口内的重复过滤逻辑保留在一个地方。
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ EMOTION_BY_TAG: dict[str, str] = {
 
 
 def extract_emotion(raw_text: str) -> str:
-    """Extract emotion from raw SenseVoice output before cleanup."""
+    """在清理前从原始的 SenseVoice 输出中提取 emotion。"""
     for tag, emotion in EMOTION_BY_TAG.items():
         if tag in raw_text:
             return emotion
@@ -63,7 +63,7 @@ def extract_emotion(raw_text: str) -> str:
 
 
 def clean_asr_text(raw_text: str) -> str:
-    """Remove SenseVoice control tags and return plain text."""
+    """移除 SenseVoice 控制标签并返回纯文本。"""
     text = raw_text
     for tag in EMOJI_DICT:
         text = text.replace(tag, "")
@@ -82,12 +82,12 @@ def is_valid_cjk_latin_text(text: str) -> bool:
 
 
 def normalize_for_match(text: str) -> str:
-    """Normalize text for self-echo and duplicate matching."""
+    """标准化文本以便进行 self-echo 和重复内容匹配。"""
     return "".join(ch.lower() for ch in text if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
 
 
 def is_self_echo(asr_text: str, last_spoken_text: str, threshold: float = 0.72) -> bool:
-    """Check whether ASR text is likely the robot hearing itself."""
+    """检查 ASR 文本是否可能是机器人听到的自身发出的声音。"""
     asr_norm = normalize_for_match(asr_text)
     spoken_norm = normalize_for_match(last_spoken_text)
 
@@ -101,7 +101,7 @@ def is_self_echo(asr_text: str, last_spoken_text: str, threshold: float = 0.72) 
 
 
 class DuplicateFilter:
-    """Drop repeated ASR results inside a short time window."""
+    """在短时间窗口内丢弃重复的 ASR 结果。"""
 
     def __init__(self, window_sec: float = 2.0) -> None:
         self._last_text = ""
