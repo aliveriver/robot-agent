@@ -98,3 +98,7 @@ vision:
   save_dir: data/camera
   local_device_index: 0
   prefer_ros: true
+  auto_start_node: true
+  launch_command: source install/setup.bash && ros2 launch orbbec_camera gemini_330_series.launch.py
+  launch_cwd: /home/nvidia/orbbec_camera_ros2
+  startup_delay_sec: 3.0

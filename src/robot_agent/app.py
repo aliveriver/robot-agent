@@ -10,12 +10,17 @@ import subprocess
 import uuid
 from concurrent.futures import CancelledError, Future
 
+from src.robot_agent.bootstrap.camera_node import CameraNodeLauncher
 from src.robot_agent.bootstrap.logging import get_logger, setup_logging
 from src.robot_agent.capabilities.asr.sherpa_adapter import SherpaRecognizer
 from src.robot_agent.capabilities.asr.text_cleaner import DuplicateFilter, is_valid_cjk_latin_text
 from src.robot_agent.graph.agent_graph import agent_graph
 from src.robot_agent.graph.nodes.wake_guard import is_exit_text, is_stop_text
 from src.robot_agent.graph.state import AgentState
+from src.robot_agent.interfaces.audio.device_resolver import (
+    log_audio_device_selection,
+    resolve_audio_devices,
+)
 from src.robot_agent.interfaces.audio.microphone import MicrophoneListener
 from src.robot_agent.runtime import runtime_session
 from src.robot_agent.settings import settings
@@ -25,16 +30,8 @@ logger = get_logger(__name__)
 SESSION_ID = "session_" + uuid.uuid4().hex[:8]
 
 
-# ---------------------------------------------------------------------------
-# PulseAudio 默认设备配置（对应 tianyi_v1.py configure_pulse_audio_devices）
-# ---------------------------------------------------------------------------
-
 def _configure_pulse_audio() -> None:
-    """在 Linux 环境中设置 PulseAudio 默认输入/输出设备。
-
-    通过环境变量 PULSE_DEFAULT_SOURCE / PULSE_DEFAULT_SINK 配置，
-    设置 DISABLE_PULSE_DEVICE_SETUP=1 可跳过。
-    """
+    """Configure PulseAudio defaults on Linux when pactl is available."""
     if os.name != "posix":
         return
 
@@ -74,6 +71,33 @@ def _configure_pulse_audio() -> None:
         _run_pactl(["set-default-source", default_source], "set default source")
     if default_sink:
         _run_pactl(["set-default-sink", default_sink], "set default sink")
+
+
+def _configure_audio_devices() -> tuple[int | None, int | None]:
+    """Resolve cross-machine audio devices and apply sounddevice defaults."""
+    try:
+        import sounddevice as sd
+    except ImportError:
+        logger.warning("app: sounddevice not installed, skipping audio device configuration")
+        return None, None
+
+    allow_shared_device = os.getenv("AUDIO_ALLOW_SHARED_DEVICE", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+        "n",
+    )
+    input_device, output_device = resolve_audio_devices(
+        input_preference=settings.audio.input_device,
+        output_preference=settings.audio.output_device,
+        allow_shared_device=allow_shared_device,
+    )
+    if input_device is None or output_device is None:
+        raise RuntimeError("app: no usable audio input/output device found")
+
+    sd.default.device = (input_device, output_device)
+    log_audio_device_selection(input_device=input_device, output_device=output_device)
+    return input_device, output_device
 
 
 async def handle_asr_result(asr_text: str, emotion: str = "neutral") -> None:
@@ -131,104 +155,118 @@ async def main() -> None:
     logger.info("robot-agent: starting", lang=settings.lang, env=settings.env)
 
     ToolRegistry.get_instance()
-
-    _configure_pulse_audio()
-
-    asr = SherpaRecognizer()
-    asr.initialize()
-
-    welcome_text = "你好，我是天轶机器人" if settings.lang == "cn" else "Hello, I am Tianyi robot"
-    try:
-        from src.robot_agent.capabilities.tts.minimax_adapter import get_tts
-
-        welcome_tts = get_tts()
-        await welcome_tts.speak(welcome_text, lang=settings.lang)
-        logger.info("app: welcome message played")
-    except Exception as exc:
-        logger.warning("app: welcome TTS failed, continuing startup", error=str(exc))
-
-    duplicate_filter = DuplicateFilter()
-    loop = asyncio.get_running_loop()
+    camera_launcher = CameraNodeLauncher()
     pending_tasks: set[Future] = set()
-
-    def interrupt_tts(reason: str, text: str) -> None:
-        """Interrupt current speech as quickly as possible."""
-        runtime_session.request_tts_interrupt()
-
-        cancelled_count = 0
-        for future in list(pending_tasks):
-            if future.cancel():
-                cancelled_count += 1
-
-        logger.info(
-            "app: tts interrupt requested",
-            reason=reason,
-            text=text[:80],
-            cancelled_tasks=cancelled_count,
-        )
-
-    def on_segment(frames) -> None:
-        """Handle one VAD audio segment."""
-        try:
-            recognition = asr.recognize_with_metadata(frames)
-        except Exception as exc:
-            logger.exception("app: ASR failed", error=str(exc))
-            return
-
-        if not recognition:
-            return
-
-        cleaned_text = recognition.cleaned_text
-        if not cleaned_text:
-            return
-
-        if not is_valid_cjk_latin_text(cleaned_text):
-            logger.debug("app: non-CJK/Latin text filtered", text=cleaned_text[:80])
-            return
-
-        if runtime_session.wake_state == "awake" and is_stop_text(cleaned_text, settings.lang):
-            interrupt_tts(reason="stop_word", text=cleaned_text)
-            return
-
-        if runtime_session.wake_state == "awake" and is_exit_text(cleaned_text, settings.lang):
-            # Interrupt current speech immediately, but still let wake_guard
-            # generate the paired sleep acknowledgement in this turn.
-            interrupt_tts(reason="exit_word", text=cleaned_text)
-
-        if runtime_session.should_ignore_self_echo(cleaned_text):
-            logger.info("app: probable self-echo ignored", text=cleaned_text[:80])
-            return
-
-        if duplicate_filter.is_duplicate(cleaned_text):
-            logger.debug("app: duplicate ASR text skipped", text=cleaned_text)
-            return
-
-        future = asyncio.run_coroutine_threadsafe(
-            handle_asr_result(cleaned_text, emotion=recognition.emotion),
-            loop,
-        )
-        pending_tasks.add(future)
-
-        def cleanup(done_future: Future) -> None:
-            pending_tasks.discard(done_future)
-            try:
-                done_future.result()
-            except CancelledError:
-                logger.debug("app: handle_asr_result cancelled")
-            except Exception as exc:
-                logger.exception("app: handle_asr_result failed", error=str(exc))
-
-        future.add_done_callback(cleanup)
-
-    mic = MicrophoneListener(on_segment=on_segment)
-    mic.start()
-
-    logger.info("robot-agent: microphone + VAD ready")
+    mic: MicrophoneListener | None = None
 
     try:
+        _configure_pulse_audio()
+        _configure_audio_devices()
+        camera_launcher.start()
+
+        asr = SherpaRecognizer()
+        asr.initialize()
+
+        welcome_text = (
+            "你好，我是天轶机器人" if settings.lang == "cn" else "Hello, I am Tianyi robot"
+        )
+        try:
+            from src.robot_agent.capabilities.tts.minimax_adapter import get_tts
+
+            welcome_tts = get_tts()
+            await welcome_tts.speak(welcome_text, lang=settings.lang)
+            logger.info("app: welcome message played")
+        except Exception as exc:
+            logger.warning("app: welcome TTS failed, continuing startup", error=str(exc))
+
+        duplicate_filter = DuplicateFilter()
+        loop = asyncio.get_running_loop()
+
+        def interrupt_tts(reason: str, text: str) -> None:
+            """Interrupt current speech as quickly as possible."""
+            runtime_session.request_tts_interrupt()
+
+            cancelled_count = 0
+            for future in list(pending_tasks):
+                if future.cancel():
+                    cancelled_count += 1
+
+            logger.info(
+                "app: tts interrupt requested",
+                reason=reason,
+                text=text[:80],
+                cancelled_tasks=cancelled_count,
+            )
+
+        def on_segment(frames) -> None:
+            """Handle one VAD audio segment."""
+            try:
+                recognition = asr.recognize_with_metadata(frames)
+            except Exception as exc:
+                logger.exception("app: ASR failed", error=str(exc))
+                return
+
+            if not recognition:
+                return
+
+            cleaned_text = recognition.cleaned_text
+            if not cleaned_text:
+                return
+
+            if not is_valid_cjk_latin_text(cleaned_text):
+                logger.debug("app: non-CJK/Latin text filtered", text=cleaned_text[:80])
+                return
+
+            if runtime_session.wake_state == "awake" and is_stop_text(cleaned_text, settings.lang):
+                interrupt_tts(reason="stop_word", text=cleaned_text)
+                return
+
+            if runtime_session.wake_state == "awake" and is_exit_text(cleaned_text, settings.lang):
+                interrupt_tts(reason="exit_word", text=cleaned_text)
+
+            if runtime_session.should_ignore_self_echo(cleaned_text):
+                logger.info("app: probable self-echo ignored", text=cleaned_text[:80])
+                return
+
+            if duplicate_filter.is_duplicate(cleaned_text):
+                logger.debug("app: duplicate ASR text skipped", text=cleaned_text)
+                return
+
+            future = asyncio.run_coroutine_threadsafe(
+                handle_asr_result(cleaned_text, emotion=recognition.emotion),
+                loop,
+            )
+            pending_tasks.add(future)
+
+            def cleanup(done_future: Future) -> None:
+                pending_tasks.discard(done_future)
+                try:
+                    done_future.result()
+                except CancelledError:
+                    logger.debug("app: handle_asr_result cancelled")
+                except Exception as exc:
+                    logger.exception("app: handle_asr_result failed", error=str(exc))
+
+            future.add_done_callback(cleanup)
+
+        mic = MicrophoneListener(on_segment=on_segment)
+        mic.start()
+
+        logger.info("robot-agent: microphone + VAD ready")
         await asyncio.Future()
     finally:
-        mic.stop()
+        if mic is not None:
+            mic.stop()
+        camera_launcher.stop()
+        for future in list(pending_tasks):
+            future.cancel()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("robot-agent: stopped by keyboard interrupt")
         for future in list(pending_tasks):
             future.cancel()
 

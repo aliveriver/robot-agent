@@ -26,6 +26,11 @@ from typing import Callable, List, Optional
 import numpy as np
 
 from src.robot_agent.bootstrap.logging import get_logger
+from src.robot_agent.interfaces.audio.device_resolver import (
+    device_label,
+    log_audio_device_selection,
+    resolve_input_device,
+)
 from src.robot_agent.settings import settings
 
 logger = get_logger(__name__)
@@ -117,15 +122,22 @@ class MicrophoneListener:
             raise RuntimeError("MicrophoneListener 启动失败: 未安装 sounddevice") from exc
 
         try:
+            resolved_device = self._resolve_input_device()
             self._stream = sd.InputStream(
                 samplerate=self._audio_cfg.sample_rate,
                 channels=self._audio_cfg.channels,
                 dtype="float32",
                 blocksize=self._audio_cfg.blocksize,
-                device=self._resolve_input_device(),
+                device=resolved_device,
                 callback=self._audio_input_callback,
             )
             self._stream.start()
+            log_audio_device_selection(input_device=resolved_device, output_device=None)
+            logger.info(
+                "MicrophoneListener: input stream ready",
+                resolved_input_device=resolved_device,
+                input_label=device_label(resolved_device),
+            )
         except Exception as exc:
             raise RuntimeError(f"MicrophoneListener 启动输入流失败: {exc}") from exc
 
@@ -243,18 +255,7 @@ class MicrophoneListener:
 
     def _resolve_input_device(self) -> int | str | None:
         """将配置中的输入设备转换为 sounddevice 可接受的类型。"""
-        if self._input_device in (None, ""):
-            return None
-
-        if isinstance(self._input_device, str):
-            device = self._input_device.strip()
-            if not device:
-                return None
-            if device.isdigit():
-                return int(device)
-            return device
-
-        return self._input_device
+        return resolve_input_device(self._input_device)
 
     def _clear_frame_queue(self) -> None:
         """清空待处理音频帧队列。"""

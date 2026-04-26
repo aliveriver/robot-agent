@@ -28,6 +28,7 @@ from typing import Any
 
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.capabilities.tts.base import TTSBase
+from src.robot_agent.interfaces.audio.device_resolver import device_label, resolve_output_device
 from src.robot_agent.settings import settings
 
 logger = get_logger(__name__)
@@ -149,19 +150,21 @@ class _StreamAudioPlayer:
             return False
 
         try:
+            resolved_output_device = resolve_output_device(self._output_device)
             self._stream = sd.RawOutputStream(
                 samplerate=32000,
                 channels=1,
                 dtype="int16",
                 blocksize=1024,
                 latency="low",
-                device=self._output_device or None,
+                device=resolved_output_device,
             )
             self._stream.start()
             self._command_name = "sounddevice"
             logger.info(
                 "MinimaxTTS: sounddevice output ready",
-                output_device=self._output_device,
+                output_device=resolved_output_device,
+                output_label=device_label(resolved_output_device),
             )
             return True
         except Exception as exc:  # noqa: BLE001

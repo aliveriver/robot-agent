@@ -105,6 +105,10 @@ class VisionSettings(BaseSettings):
     save_dir: str = Field(...)
     local_device_index: int = Field(...)
     prefer_ros: bool = Field(...)
+    auto_start_node: bool = Field(False)
+    launch_command: str = Field("")
+    launch_cwd: str = Field("")
+    startup_delay_sec: float = Field(0.0)
 
     model_config = SettingsConfigDict(
         env_prefix="VISION_",

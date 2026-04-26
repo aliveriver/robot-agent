@@ -28,6 +28,8 @@ import requests
 import sounddevice as sd
 import soundfile as sf
 
+from src.robot_agent.interfaces.audio.device_resolver import resolve_input_device
+
 
 class VoiceCloner:
     """声音克隆服务客户端。"""
@@ -58,17 +60,18 @@ class VoiceCloner:
         target_path = Path(filename)
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
+        resolved_device = resolve_input_device(self.device)
         use_sample_rate = sample_rate
         try:
             sd.check_input_settings(
-                device=self.device,
+                device=resolved_device,
                 channels=1,
                 dtype="int16",
                 samplerate=sample_rate,
             )
         except Exception:
             try:
-                device_info = sd.query_devices(self.device, "input")
+                device_info = sd.query_devices(resolved_device, "input")
                 use_sample_rate = int(device_info["default_samplerate"])
             except Exception:
                 use_sample_rate = sample_rate
@@ -79,7 +82,7 @@ class VoiceCloner:
                 samplerate=use_sample_rate,
                 channels=1,
                 dtype="int16",
-                device=self.device,
+                device=resolved_device,
             )
             sd.wait()
 
