@@ -122,9 +122,9 @@ async def main() -> None:
             return
 
         if runtime_session.wake_state == "awake" and is_exit_text(cleaned_text, settings.lang):
-            runtime_session.wake_state = "sleep"
+            # Interrupt current speech immediately, but still let wake_guard
+            # generate the paired sleep acknowledgement in this turn.
             interrupt_tts(reason="exit_word", text=cleaned_text)
-            return
 
         if runtime_session.should_ignore_self_echo(cleaned_text):
             logger.info("app: probable self-echo ignored", text=cleaned_text[:80])
