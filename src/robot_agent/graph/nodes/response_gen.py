@@ -19,7 +19,7 @@ from src.robot_agent.graph.state import AgentState
 
 logger = get_logger(__name__)
 
-PROMPT_DIR = Path(__file__).resolve().parents[5] / "configs" / "prompts"
+PROMPT_DIR = Path(__file__).resolve().parents[4] / "configs" / "prompts"
 
 FALLBACK_RESPONSES: dict[str, dict[str, str]] = {
     "cn": {

@@ -50,11 +50,12 @@ ensure_env() {
 install_python_deps() {
   python -m pip install --upgrade pip setuptools wheel
   python -m pip install -r requirements.txt
+  python -m pip install --upgrade --force-reinstall \
+    "numpy==1.26.4" \
+    "opencv-python==4.9.0.80"
 
   python -m pip install \
-    "sherpa-onnx" \
-    "soundfile" \
-    "opencv-python<4.10"
+    "sherpa-onnx"
 }
 
 prepare_runtime_dirs() {
