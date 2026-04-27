@@ -53,6 +53,9 @@ class RosCameraProvider(VisionBase):
         self._capture_lock = threading.Lock()
         self._ros_init_lock = threading.Lock()
         self._ros_initialized = False
+        self._ros_node = None
+        self._ros_spin_thread: threading.Thread | None = None
+        self._ros_stop_event = threading.Event()
 
     async def capture_base64(self) -> str | None:
         """抓取一帧当前画面并返回 JPEG base64。"""
@@ -77,57 +80,46 @@ class RosCameraProvider(VisionBase):
     def _capture_from_ros(self) -> str | None:
         try:
             import cv2
-            import rclpy
             from cv_bridge import CvBridge
-            from rclpy.node import Node
+            from rclpy.qos import qos_profile_sensor_data
             from sensor_msgs.msg import Image
         except ImportError as exc:
             logger.debug("RosCameraProvider: ROS capture unavailable", error=str(exc))
             return None
 
-        with self._ros_init_lock:
-            if not self._ros_initialized:
-                try:
-                    rclpy.init(args=None)
-                except RuntimeError:
-                    # ROS 上下文可能已由外部初始化，直接复用。
-                    pass
-                self._ros_initialized = True
+        node = self._ensure_ros_node()
+        if node is None:
+            return None
 
         bridge = CvBridge()
         frame_event = threading.Event()
         frame_container: dict[str, str] = {}
 
-        class _CaptureNode(Node):
-            def __init__(self, provider: RosCameraProvider) -> None:
-                super().__init__("robot_agent_camera_capture")
-                self._provider = provider
+        def _img_cb(msg: Image) -> None:
+            try:
+                frame = bridge.imgmsg_to_cv2(msg, "bgr8")
+                image_b64 = self._encode_frame(frame, cv2)
+                if image_b64:
+                    frame_container["image_b64"] = image_b64
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("RosCameraProvider: ROS frame conversion failed", error=str(exc))
+            finally:
+                frame_event.set()
 
-            def callback(self, msg: Image) -> None:
-                try:
-                    frame = bridge.imgmsg_to_cv2(msg, "bgr8")
-                    image_b64 = self._provider._encode_frame(frame, cv2)
-                    if image_b64:
-                        frame_container["image_b64"] = image_b64
-                except Exception as exc:  # noqa: BLE001
-                    logger.exception("RosCameraProvider: ROS frame conversion failed", error=str(exc))
-                finally:
-                    frame_event.set()
-
-        node = _CaptureNode(self)
-        subscription = node.create_subscription(Image, self._topic, node.callback, 10)
+        # 贴近旧版 tianyi_v1.py：在一个长期存在、持续 spin 的节点上临时挂订阅，
+        # 等到第一帧后立刻销毁订阅，而不是每次抓图都新建临时节点。
+        subscription = node.create_subscription(
+            Image,
+            self._topic,
+            _img_cb,
+            qos_profile_sensor_data,
+        )
 
         try:
-            deadline = time.monotonic() + self._timeout
-            while time.monotonic() < deadline and not frame_event.is_set():
-                rclpy.spin_once(node, timeout_sec=0.1)
+            frame_event.wait(self._timeout)
         finally:
             try:
                 node.destroy_subscription(subscription)
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                node.destroy_node()
             except Exception:  # noqa: BLE001
                 pass
 
@@ -143,6 +135,63 @@ class RosCameraProvider(VisionBase):
         if image_b64:
             logger.info("RosCameraProvider: captured frame from ROS", topic=self._topic)
         return image_b64
+
+    def _ensure_ros_node(self):
+        if self._ros_node is not None:
+            return self._ros_node
+
+        try:
+            import rclpy
+            from rclpy.node import Node
+        except ImportError as exc:
+            logger.debug("RosCameraProvider: ROS runtime unavailable", error=str(exc))
+            return None
+
+        with self._ros_init_lock:
+            if self._ros_node is not None:
+                return self._ros_node
+
+            if not self._ros_initialized:
+                try:
+                    rclpy.init(args=None)
+                except RuntimeError:
+                    # ROS 上下文可能已由外部初始化，直接复用。
+                    pass
+                self._ros_initialized = True
+
+            try:
+                self._ros_node = Node("robot_agent_camera_capture")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("RosCameraProvider: failed to create ROS capture node", error=str(exc))
+                self._ros_node = None
+                return None
+
+            self._ros_stop_event.clear()
+            self._ros_spin_thread = threading.Thread(
+                target=self._spin_ros_node,
+                name="robot_agent_ros_camera_spin",
+                daemon=True,
+            )
+            self._ros_spin_thread.start()
+            logger.info("RosCameraProvider: ROS capture node ready", topic=self._topic)
+            return self._ros_node
+
+    def _spin_ros_node(self) -> None:
+        try:
+            import rclpy
+        except ImportError:
+            return
+
+        while not self._ros_stop_event.is_set():
+            node = self._ros_node
+            if node is None:
+                return
+
+            try:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("RosCameraProvider: ROS spin loop stopped", error=str(exc))
+                return
 
     def _capture_from_local_camera(self) -> str | None:
         try:
