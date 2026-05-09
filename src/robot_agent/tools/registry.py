@@ -52,6 +52,13 @@ class ToolRegistry:
         from src.robot_agent.tools.builtin.control_tools import sleep_robot, start_voice_clone
         from src.robot_agent.tools.builtin.device_tools import get_time, get_robot_status
         from src.robot_agent.tools.builtin.memory_tools import save_profile_fact, search_memory
+        from src.robot_agent.tools.builtin.arm_tools import (
+            move_arm_joints,
+            control_hand,
+            control_both_hands,
+            reset_arms,
+            list_gestures,
+        )
 
         self.register(
             "get_time",
@@ -134,6 +141,142 @@ class ToolRegistry:
                         "maximum": 30,
                     }
                 },
+                "additionalProperties": False,
+            },
+        )
+
+        # ── 机械臂控制 ──────────────────────────────────────────────────────────
+        self.register(
+            "move_arm_joints",
+            move_arm_joints,
+            description="控制机器人左臂、右臂或双臂移动到指定关节角度（弧度）。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "side": {
+                        "type": "string",
+                        "enum": ["left", "right", "both"],
+                        "description": "控制哪一侧手臂：left=左臂，right=右臂，both=双臂。",
+                    },
+                    "positions": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "minItems": 7,
+                        "maxItems": 7,
+                        "description": "7 个关节目标角度（弧度），从肩到腕依次排列，范围约 -3.14 ~ 3.14。",
+                    },
+                    "kp": {
+                        "type": "number",
+                        "description": "位置增益（可选，默认 100.0）。",
+                    },
+                    "kd": {
+                        "type": "number",
+                        "description": "阻尼增益（可选，默认 2.0）。",
+                    },
+                },
+                "required": ["side", "positions"],
+                "additionalProperties": False,
+            },
+        )
+
+        # ── 灵巧手控制 ──────────────────────────────────────────────────────────
+        self.register(
+            "control_hand",
+            control_hand,
+            description=(
+                "控制单只灵巧手做预设手势或自定义角度。"
+                "支持手势：open(张开)、close(握拳)、pinch(捏取)、point(指向)、"
+                "thumbup(竖大拇指)、peace(剪刀手)、rock(摇滚)、ok(OK手势)、custom(自定义)。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "side": {
+                        "type": "string",
+                        "enum": ["left", "right"],
+                        "description": "控制哪只手：left=左手，right=右手。",
+                    },
+                    "gesture": {
+                        "type": "string",
+                        "enum": [
+                            "open", "close", "pinch", "point",
+                            "thumbup", "peace", "rock", "ok", "custom",
+                        ],
+                        "description": "预设手势名称，或 custom 配合 angles 参数使用。",
+                    },
+                    "angles": {
+                        "type": "array",
+                        "items": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                        "minItems": 6,
+                        "maxItems": 6,
+                        "description": "仅 gesture=custom 时需要：6 个手指角度（0.0=张开，1.0=合拢）。",
+                    },
+                },
+                "required": ["side", "gesture"],
+                "additionalProperties": False,
+            },
+        )
+        self.register(
+            "control_both_hands",
+            control_both_hands,
+            description="同时控制左右双手，两只手可以做不同的手势。",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "left_gesture": {
+                        "type": "string",
+                        "enum": [
+                            "open", "close", "pinch", "point",
+                            "thumbup", "peace", "rock", "ok", "custom",
+                        ],
+                        "description": "左手手势名称。",
+                    },
+                    "right_gesture": {
+                        "type": "string",
+                        "enum": [
+                            "open", "close", "pinch", "point",
+                            "thumbup", "peace", "rock", "ok", "custom",
+                        ],
+                        "description": "右手手势名称。",
+                    },
+                    "left_angles": {
+                        "type": "array",
+                        "items": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                        "minItems": 6,
+                        "maxItems": 6,
+                        "description": "左手自定义角度（left_gesture=custom 时使用）。",
+                    },
+                    "right_angles": {
+                        "type": "array",
+                        "items": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+                        "minItems": 6,
+                        "maxItems": 6,
+                        "description": "右手自定义角度（right_gesture=custom 时使用）。",
+                    },
+                },
+                "required": ["left_gesture", "right_gesture"],
+                "additionalProperties": False,
+            },
+        )
+
+        # ── 双臂辅助工具 ────────────────────────────────────────────────────────
+        self.register(
+            "reset_arms",
+            reset_arms,
+            description="让机器人双臂回到零位（关节清零）。",
+            parameters={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        )
+        self.register(
+            "list_gestures",
+            list_gestures,
+            description="列出当前灵巧手支持的所有预设手势名称。",
+            parameters={
+                "type": "object",
+                "properties": {},
                 "additionalProperties": False,
             },
         )
