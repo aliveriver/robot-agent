@@ -6,7 +6,8 @@ interfaces/ros2/hand_publisher.py - 灵巧手 ROS2 Publisher 封装
   - /inspire_hand/ctrl/right_hand  (右手)
 
 消息类型：sensor_msgs/msg/JointState
-  position 字段范围：0（张开）~ 1000（合拢）
+  工具层对外使用逻辑角度 0.0（张开）~ 1.0（合拢）
+  实测控制 topic 的 position 方向相反，发布前会转换为 1.0（张开）~ 0.0（合拢）
 
 手指 ID / name 映射：
   1: 小指   (little)
@@ -39,7 +40,8 @@ logger = get_logger(__name__)
 # 顺序：1=小指, 2=无名指, 3=中指, 4=食指, 5=拇指弯曲, 6=拇指旋转
 FINGER_NAMES: list[str] = ["1", "2", "3", "4", "5", "6"]
 
-# 归一化范围：0.0（张开）~ 1.0（合拢）
+# 对外逻辑范围：0.0（张开）~ 1.0（合拢）。
+# 实测 Inspire Hand 控制 topic 的 position 方向相反：1.0 为张开，0.0 为合拢。
 ANGLE_MIN = 0.0
 ANGLE_MAX = 1.0
 
@@ -87,8 +89,8 @@ class HandPublisher:
 
         Args:
             side:   "left" 或 "right"
-            angles: 6 个手指的目标角度（归一化值 0.0=张开 ~ 1.0=合拢）
-                    内部会乘以 1000 再发布（SDK 期望 0~1000）
+            angles: 6 个手指的目标角度（逻辑值 0.0=张开 ~ 1.0=合拢）。
+                    发布前会转换为设备 position：1.0=张开 ~ 0.0=合拢。
         """
         if len(angles) != 6:
             raise ValueError(f"angles 必须包含 6 个元素，当前为 {len(angles)}")
@@ -99,10 +101,13 @@ class HandPublisher:
             for a in angles
         ]
 
+        driver_positions = [ANGLE_MAX - a for a in clamped]
+
         logger.info(
             "HandPublisher.set_hand_angles",
             side=side,
             angles=[round(a, 3) for a in clamped],
+            driver_positions=[round(p, 3) for p in driver_positions],
             sim=self._sim_mode,
         )
 
@@ -112,7 +117,7 @@ class HandPublisher:
         msg = JointState()
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.name     = FINGER_NAMES          # ["1","2","3","4","5","6"]
-        msg.position = clamped              # 直接发 0~1 归一化值
+        msg.position = driver_positions
 
         with self._lock:
             if side == "left":
