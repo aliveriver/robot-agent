@@ -33,11 +33,18 @@ from typing import Optional
 try:
     import rclpy
     from rclpy.node import Node
-    from bodyctrl_msgs.msg import MotorStatusMsg
-
-    _ROS2_AVAILABLE = True
+    _RCLPY_AVAILABLE = True
 except ImportError:
-    _ROS2_AVAILABLE = False
+    _RCLPY_AVAILABLE = False
+
+try:
+    from bodyctrl_msgs.msg import MotorStatusMsg
+    _BODYCTRL_AVAILABLE = True
+except ImportError:
+    _BODYCTRL_AVAILABLE = False
+
+# 两者同时可用才能订阅手臂状态
+_ROS2_AVAILABLE = _RCLPY_AVAILABLE and _BODYCTRL_AVAILABLE
 
 from src.robot_agent.bootstrap.logging import get_logger
 
@@ -90,9 +97,22 @@ class ArmSubscriber:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._state = BothArmsState()
+        self._unavail_reason: str = ""
 
-        if not _ROS2_AVAILABLE:
-            logger.warning("ArmSubscriber: rclpy/bodyctrl_msgs 不可用，进入模拟模式")
+        if not _RCLPY_AVAILABLE:
+            self._unavail_reason = "rclpy 未安装，请确认 ROS2 环境已 source"
+            logger.warning("ArmSubscriber: rclpy 不可用，进入离线模式")
+            self._sim_mode = True
+            return
+
+        if not _BODYCTRL_AVAILABLE:
+            self._unavail_reason = (
+                "bodyctrl_msgs 不可用，请在机器人工作空间编译并 source 后再启动"
+            )
+            logger.warning(
+                "ArmSubscriber: bodyctrl_msgs 未编译/source，进入离线模式。"
+                "相机正常工作说明 rclpy 已可用，可先在 ROS2 workspace 编译 bodyctrl_msgs"
+            )
             self._sim_mode = True
             return
 
@@ -189,11 +209,9 @@ class ArmSubscriber:
         state = self.get_state()
 
         if self._sim_mode or not state.is_valid:
-            stale_note = "（模拟模式，数据为占位值）" if self._sim_mode else "（尚未收到真实数据）"
-            return (
-                f"双臂状态暂不可用 {stale_note}。\n"
-                "可先调用 reset_arms 工具让机械臂归零，再查询状态。"
-            )
+            reason = self._unavail_reason or "尚未收到真实数据"
+            # 返回面向 LLM 的技术描述（不直接播报给用户）
+            return f"[ARM_STATUS_UNAVAILABLE] 原因：{reason}"
 
         # 检查数据新鲜度
         now = time.monotonic()

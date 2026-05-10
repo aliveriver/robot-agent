@@ -19,14 +19,19 @@ from typing import Sequence
 try:
     import rclpy
     from rclpy.node import Node
+    _RCLPY_AVAILABLE = True
+except ImportError:
+    _RCLPY_AVAILABLE = False
 
+try:
     # 自定义消息包（需在 ROS2 workspace 编译并 source 后可用）
     from bodyctrl_msgs.msg import CmdMotorCtrl, CmdSetMotorSpeed
     from std_msgs.msg import String
-
-    _ROS2_AVAILABLE = True
+    _BODYCTRL_AVAILABLE = True
 except ImportError:
-    _ROS2_AVAILABLE = False
+    _BODYCTRL_AVAILABLE = False
+
+_ROS2_AVAILABLE = _RCLPY_AVAILABLE and _BODYCTRL_AVAILABLE
 
 from src.robot_agent.bootstrap.logging import get_logger
 
@@ -48,8 +53,15 @@ class ArmPublisher:
     """
 
     def __init__(self) -> None:
-        if not _ROS2_AVAILABLE:
-            logger.warning("ArmPublisher: rclpy/bodyctrl_msgs 不可用，进入模拟模式")
+        if not _RCLPY_AVAILABLE:
+            logger.warning("ArmPublisher: rclpy 不可用，进入离线模式")
+            self._sim_mode = True
+            return
+
+        if not _BODYCTRL_AVAILABLE:
+            logger.warning(
+                "ArmPublisher: bodyctrl_msgs 未编译/source，进入离线模式"
+            )
             self._sim_mode = True
             return
 
