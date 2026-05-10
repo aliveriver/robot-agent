@@ -175,9 +175,10 @@ class ArmSubscriber:
             for mid in ids:
                 item = id_map.get(mid)
                 s.motor_ids.append(mid)
+                # 字段名来自首帧日志: pos / speed / current / temperature
                 s.positions.append(   float(getattr(item, "pos",         0.0)) if item else 0.0)
-                s.speeds.append(      float(getattr(item, "spd",         0.0)) if item else 0.0)
-                s.torques.append(     float(getattr(item, "tor",         0.0)) if item else 0.0)
+                s.speeds.append(      float(getattr(item, "speed",       0.0)) if item else 0.0)
+                s.torques.append(     float(getattr(item, "current",     0.0)) if item else 0.0)
                 s.temperatures.append(float(getattr(item, "temperature", 0.0)) if item else 0.0)
             return s
 
@@ -197,11 +198,22 @@ class ArmSubscriber:
         with self._lock:
             return copy.deepcopy(self._state)
 
-    def get_formatted_status(self) -> str:
+    def get_formatted_status(self, wait_first_frame: float = 1.5) -> str:
         """
         返回面向 LLM 的可读状态字符串。
         不可用时返回带 [ARM_STATUS_UNAVAILABLE] 标记的技术描述。
+
+        Args:
+            wait_first_frame: subscriber 刚启动时等待首帧的最长秒数（默认 1.5s）
         """
+        # 竞态处理：若 subscriber 刚启动但尚未收到首帧，短暂等待
+        if not self._sim_mode and not self.get_state().is_valid and wait_first_frame > 0:
+            deadline = time.monotonic() + wait_first_frame
+            while time.monotonic() < deadline:
+                if self.get_state().is_valid:
+                    break
+                time.sleep(0.05)
+
         state = self.get_state()
 
         if self._sim_mode or not state.is_valid:
