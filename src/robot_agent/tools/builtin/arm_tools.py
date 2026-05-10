@@ -23,6 +23,7 @@ from typing import Any
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.graph.state import AgentState
 from src.robot_agent.interfaces.ros2.arm_publisher import LEFT_ARM_IDS, RIGHT_ARM_IDS
+from src.robot_agent.interfaces.ros2.arm_subscriber import JOINT_LABELS
 
 logger = get_logger(__name__)
 
@@ -30,6 +31,7 @@ logger = get_logger(__name__)
 # 懒加载 ROS2 接口单例（避免非 ROS2 环境 import 失败）
 # ──────────────────────────────────────────────
 _arm_pub = None
+_arm_sub = None
 _hand_pub = None
 
 
@@ -39,6 +41,14 @@ def _get_arm_pub():
         from src.robot_agent.interfaces.ros2.arm_publisher import ArmPublisher
         _arm_pub = ArmPublisher()
     return _arm_pub
+
+
+def _get_arm_sub():
+    global _arm_sub
+    if _arm_sub is None:
+        from src.robot_agent.interfaces.ros2.arm_subscriber import ArmSubscriber
+        _arm_sub = ArmSubscriber()
+    return _arm_sub
 
 
 def _get_hand_pub():
@@ -119,10 +129,30 @@ async def move_arm_joints(
     """
     控制机器人左臂、右臂或双臂移动到指定关节角度。
 
+    《关节布局》（每侧 7 个关节，索引 0~6）：
+      J1 肩俧仰 shoulder_pitch  范围：-1.57 ~ +1.57 rad
+      J2 肩侧摇 shoulder_roll   范围：-1.57 ~ +1.57 rad
+      J3 肩旋转 shoulder_yaw    范围：-1.57 ~ +1.57 rad
+      J4 肘弯曲 elbow           范围：  0.00 ~ +2.36 rad
+      J5 腕旋转 wrist_roll      范围：-1.57 ~ +1.57 rad
+      J6 腕俧仰 wrist_pitch     范围：-1.04 ~ +1.04 rad
+      J7 腕偏转 wrist_yaw       范围：-0.79 ~ +0.79 rad
+
+    《常用参考姿态》（positions 实例）：
+      自然垂侧（展开状态）: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      居中展开（平降 90°）: [1.57, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      前推平举（指向正前）: [0.0, -1.57, 0.0, 0.0, 0.0, 0.0, 0.0]
+      居中居山房封弹（常用起始姿）: [0.3, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+
+    《建议工作流程》：
+      1. 先调用 get_arm_status 获取当前关节位置（避免盲目大幅度跃变）
+      2. 基于当前状态小幅度调整，单次调整建议不超过 0.5 rad
+      3. 需要大范围运动时，分多步调用本工具
+
     Args:
         side:      "left" | "right" | "both"
-        positions: 7 个关节目标角度（弧度，建议范围 -π ~ π）
-        kp:        位置增益（默认 100.0）
+        positions: 7 个关节目标角度（弧度），按 J1~J7 顺序提供
+        kp:        位置增益（默认 100.0，慢速兴起可调小至 50.0）
         kd:        阻尼增益（默认 2.0）
     """
     if positions is None or len(positions) != 7:
@@ -333,3 +363,27 @@ async def list_gestures(
         else f"Available gestures: {', '.join(names)}."
     )
     return {"ok": True, "gestures": names, "state_updates": {"response_text": message}}
+
+
+async def get_arm_status(
+    state: AgentState,
+    **kwargs: Any,
+) -> dict:
+    """
+    读取并返回当前双臂关节的实时状态。
+
+    返回每个关节的：位置（rad）、速度（rad/s）、力矩（Nm）、温度（°C）。
+    建议在发送运动指令前先调用本工具，了解当前姿态。
+    """
+    def _read() -> str:
+        sub = _get_arm_sub()
+        return sub.get_formatted_status()
+
+    status_text = await asyncio.to_thread(_read)
+
+    logger.info("get_arm_status: 状态已读取")
+    return {
+        "ok": True,
+        "status": status_text,
+        "state_updates": {"response_text": status_text},
+    }

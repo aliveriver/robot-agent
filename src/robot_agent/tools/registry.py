@@ -58,6 +58,7 @@ class ToolRegistry:
             control_both_hands,
             reset_arms,
             list_gestures,
+            get_arm_status,
         )
 
         self.register(
@@ -147,9 +148,30 @@ class ToolRegistry:
 
         # ── 机械臂控制 ──────────────────────────────────────────────────────────
         self.register(
+            "get_arm_status",
+            get_arm_status,
+            description=(
+                "获取机器人当前双臂关节状态（位置/速度/力矩/温度）。"
+                "建议在调用 move_arm_joints 前先执行本工具，了解当前姿态。"
+            ),
+            parameters={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+        )
+        self.register(
             "move_arm_joints",
             move_arm_joints,
-            description="控制机器人左臂、右臂或双臂移动到指定关节角度（弧度）。",
+            description=(
+                "控制机器人左臂、右臂或双臂移动到指定关节角度。"
+                "每侧臂有 7 个关节，按 J1~J7 顺序："
+                "J1=肩俧仰(-1.57~+1.57)、J2=肩侧摇(-1.57~+1.57)、"
+                "J3=肩旋转(-1.57~+1.57)、J4=肘弯曲(0~+2.36)、"
+                "J5=腕旋转(-1.57~+1.57)、J6=腕俧仰(-1.04~+1.04)、J7=腕偏转(-0.79~+0.79)。"
+                "常用姿态：垂侧=[0,0,0,0,0,0,0]、上抖=[1.57,0,0,0,0,0,0]、居中强=[0.3,0,0,1.0,0,0,0]。"
+                "建议先调用 get_arm_status 确认当前关节位置，单次调整建议不超过 0.5 rad。"
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -163,11 +185,15 @@ class ToolRegistry:
                         "items": {"type": "number"},
                         "minItems": 7,
                         "maxItems": 7,
-                        "description": "7 个关节目标角度（弧度），从肩到腕依次排列，范围约 -3.14 ~ 3.14。",
+                        "description": (
+                            "7 个关节目标角度（弧度），按 J1~J7 顺序提供。"
+                            "各关节范围：J1(-1.57~1.57) J2(-1.57~1.57) J3(-1.57~1.57) "
+                            "J4(0~2.36) J5(-1.57~1.57) J6(-1.04~1.04) J7(-0.79~0.79)。"
+                        ),
                     },
                     "kp": {
                         "type": "number",
-                        "description": "位置增益（可选，默认 100.0）。",
+                        "description": "位置增益（可选，默认 100.0，慢速兴起可调小至 50.0）。",
                     },
                     "kd": {
                         "type": "number",
