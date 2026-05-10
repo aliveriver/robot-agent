@@ -335,7 +335,7 @@ async def reset_arms(
     """
     def _send() -> None:
         pub = _get_arm_pub()
-        pub.set_zero("all")
+        pub.set_zero()
 
     await asyncio.to_thread(_send)
 
