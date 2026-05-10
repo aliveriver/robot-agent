@@ -301,6 +301,14 @@ async def main() -> None:
         for future in list(pending_tasks):
             future.cancel()
 
+        # 显式 shutdown rclpy，避免 GC 析构时的 segfault
+        try:
+            import rclpy as _rclpy
+            if _rclpy.ok():
+                _rclpy.try_shutdown()
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     try:
@@ -308,3 +316,8 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         # pending_tasks 的清理已在 main() 的 finally 块中完成
         logger.info("robot-agent: 用户中断执行 (KeyboardInterrupt)")
+    finally:
+        # 使用 os._exit 跳过 Python GC 析构阶段，
+        # 避免 rclpy C++ 层对象析构顺序错误引发 segfault
+        import os as _os
+        _os._exit(0)

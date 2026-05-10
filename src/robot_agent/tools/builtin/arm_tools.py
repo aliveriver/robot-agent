@@ -400,10 +400,25 @@ async def get_arm_status(
         )
 
     logger.info("get_arm_status: 状态已读取", unavailable=is_unavailable)
+
+    if is_unavailable:
+        # 驱动未就绪时告知用户，同时终止本轮工具链
+        user_reply = (
+            "当前无法读取机械臂状态，驱动程序可能尚未启动，请稍后再试。"
+            if state.language == "cn"
+            else "Unable to read arm status. The driver may not be running yet."
+        )
+        return {
+            "ok": False,
+            "status": status_text,
+            # 失败时才设 response_text，让 LLM 知道本次无法继续
+            "state_updates": {"response_text": user_reply},
+        }
+
+    # 成功时：不设 response_text，图形会再次调用 LLM，
+    # LLM 拿到 status 数据后可继续选择 move_arm_joints 等工具
     return {
-        "ok": not is_unavailable,
-        # status：完整技术数据，LLM 依此决定运动目标角度
+        "ok": True,
         "status": status_text,
-        # response_text：用户听到的简短语音
-        "state_updates": {"response_text": user_reply},
+        # 无 state_updates → response_gen 不会用 prebuilt，LLM 继续决策
     }
