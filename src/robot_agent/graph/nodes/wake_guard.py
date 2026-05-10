@@ -31,6 +31,11 @@ def normalize_command_text(value: str) -> str:
     )
 
 
+def _contains_chinese(text: str) -> bool:
+    """Return True when text contains at least one CJK unified ideograph."""
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
 def _contains_keyword(text: str, keywords: list[str]) -> bool:
     """判断文本是否包含关键词。"""
     text_norm = normalize_command_text(text)
@@ -71,6 +76,12 @@ def wake_guard(state: AgentState) -> dict:
     lang = state.language
 
     updates: dict = {}
+
+    if settings.lang == "cn" and settings.ignore_non_chinese_input and not _contains_chinese(text):
+        logger.info("wake_guard: non-Chinese input ignored", text=text[:80])
+        updates["response_text"] = "__SKIP__"
+        updates["normalized_text"] = ""
+        return updates
 
     if state.wake_state == "sleep":
         if is_wake_text(text, lang):
