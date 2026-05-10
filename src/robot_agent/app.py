@@ -15,6 +15,26 @@ from dotenv import load_dotenv
 # 加载 .env 环境变量到 os.environ，以便 LangSmith 等依赖可直接读取
 load_dotenv()
 
+# ── ROS2 自定义消息包路径注入 ────────────────────────────────────
+# 在未 source ros2ws 的情况下（如直接 python -m ...），
+# 手动把 bodyctrl_msgs 的 Python 包路径加入 sys.path。
+import sys as _sys
+import glob as _glob
+
+_ROS2_WS = os.environ.get(
+    "ROS2_WS", "/opt/PARTITIONS/A/ros2ws"
+)
+# 匹配类似 install/*/local/lib/python*/dist-packages 的路径
+_dist_pkgs = _glob.glob(
+    f"{_ROS2_WS}/install/*/local/lib/python*/dist-packages"
+)
+for _p in _dist_pkgs:
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+if _dist_pkgs:
+    pass  # 路径已注入，bodyctrl_msgs 应可 import
+
+
 from src.robot_agent.bootstrap.camera_node import CameraNodeLauncher
 from src.robot_agent.bootstrap.logging import get_logger, setup_logging
 from src.robot_agent.capabilities.asr.sherpa_adapter import SherpaRecognizer
