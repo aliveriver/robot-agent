@@ -10,6 +10,11 @@ import subprocess
 import uuid
 from concurrent.futures import CancelledError, Future
 
+from dotenv import load_dotenv
+
+# 加载 .env 环境变量到 os.environ，以便 LangSmith 等依赖可直接读取
+load_dotenv()
+
 from src.robot_agent.bootstrap.camera_node import CameraNodeLauncher
 from src.robot_agent.bootstrap.logging import get_logger, setup_logging
 from src.robot_agent.capabilities.asr.sherpa_adapter import SherpaRecognizer
