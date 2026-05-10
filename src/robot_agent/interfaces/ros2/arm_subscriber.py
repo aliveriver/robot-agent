@@ -146,36 +146,49 @@ class ArmSubscriber:
 
     def _on_status(self, msg: "MotorStatusMsg") -> None:  # type: ignore[name-defined]
         """将收到的 MotorStatusMsg 分左右臂存入缓存。"""
-        # 构建 id -> index 映射
-        id_map: dict[int, int] = {mid: i for i, mid in enumerate(msg.name)}
+        # ── 第一帧：打印消息字段，便于确认 SDK 实际结构 ──────────
+        if not self._state.is_valid:
+            try:
+                fields = [f for f in dir(msg) if not f.startswith("_")]
+                logger.info(
+                    "ArmSubscriber: 首帧 MotorStatusMsg 可用字段",
+                    fields=fields,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        # ── 兼容多种字段名（SDK 版本差异）────────────────────────
+        # 尝试 name → motor_id → id，取第一个非空的
+        motor_ids_raw = (
+            getattr(msg, "name", None)
+            or getattr(msg, "motor_id", None)
+            or getattr(msg, "id", None)
+            or []
+        )
+        pos_raw  = getattr(msg, "pos",         getattr(msg, "position",    []))
+        spd_raw  = getattr(msg, "spd",         getattr(msg, "velocity",    []))
+        tor_raw  = getattr(msg, "tor",         getattr(msg, "effort",      []))
+        temp_raw = getattr(msg, "temperature", getattr(msg, "temp",        []))
+
+        if not motor_ids_raw:
+            logger.warning(
+                "ArmSubscriber: 无法从 MotorStatusMsg 提取电机 ID，跳过本帧",
+                tried_fields=["name", "motor_id", "id"],
+            )
+            return
+
+        id_map: dict[int, int] = {int(mid): i for i, mid in enumerate(motor_ids_raw)}
 
         def _extract(ids: list[int]) -> ArmJointState:
             s = ArmJointState()
             s.timestamp = time.monotonic()
             for mid in ids:
                 idx = id_map.get(mid)
-                if idx is None:
-                    s.motor_ids.append(mid)
-                    s.positions.append(0.0)
-                    s.speeds.append(0.0)
-                    s.torques.append(0.0)
-                    s.temperatures.append(0.0)
-                else:
-                    s.motor_ids.append(mid)
-                    s.positions.append(
-                        msg.pos[idx] if idx < len(msg.pos) else 0.0
-                    )
-                    s.speeds.append(
-                        msg.spd[idx] if idx < len(msg.spd) else 0.0
-                    )
-                    s.torques.append(
-                        msg.tor[idx] if idx < len(msg.tor) else 0.0
-                    )
-                    s.temperatures.append(
-                        msg.temperature[idx]
-                        if hasattr(msg, "temperature") and idx < len(msg.temperature)
-                        else 0.0
-                    )
+                s.motor_ids.append(mid)
+                s.positions.append(    float(pos_raw[idx])  if idx is not None and idx < len(pos_raw)  else 0.0)
+                s.speeds.append(       float(spd_raw[idx])  if idx is not None and idx < len(spd_raw)  else 0.0)
+                s.torques.append(      float(tor_raw[idx])  if idx is not None and idx < len(tor_raw)  else 0.0)
+                s.temperatures.append( float(temp_raw[idx]) if idx is not None and idx < len(temp_raw) else 0.0)
             return s
 
         left  = _extract(LEFT_ARM_IDS)

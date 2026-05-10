@@ -154,6 +154,21 @@ async def main() -> None:
     setup_logging()
     logger.info("robot-agent: starting", lang=settings.lang, env=settings.env)
 
+    # ── LangSmith tracing 状态检测 ──────────────────────────────
+    _ls_tracing = os.getenv("LANGSMITH_TRACING", "").lower() in ("true", "1", "yes")
+    _ls_project = os.getenv("LANGSMITH_PROJECT", "(未设置)")
+    if _ls_tracing and os.getenv("LANGSMITH_API_KEY"):
+        logger.info(
+            "robot-agent: LangSmith tracing 已开启",
+            project=_ls_project,
+            endpoint=os.getenv("LANGSMITH_ENDPOINT", "https://api.smith.langchain.com"),
+        )
+    else:
+        logger.info(
+            "robot-agent: LangSmith tracing 未开启"
+            "（在 .env 中设置 LANGSMITH_TRACING=true 和 LANGSMITH_API_KEY 可开启）"
+        )
+
     ToolRegistry.get_instance()
     camera_launcher = CameraNodeLauncher()
     pending_tasks: set[Future] = set()
@@ -266,6 +281,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        # pending_tasks 的清理已在 main() 的 finally 块中完成
         logger.info("robot-agent: 用户中断执行 (KeyboardInterrupt)")
-        for future in list(pending_tasks):
-            future.cancel()

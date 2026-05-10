@@ -381,9 +381,29 @@ async def get_arm_status(
 
     status_text = await asyncio.to_thread(_read)
 
-    logger.info("get_arm_status: 状态已读取")
+    # [ARM_STATUS_UNAVAILABLE] 标记表示驱动未就绪或数据尚未到达
+    is_unavailable = status_text.startswith("[ARM_STATUS_UNAVAILABLE]")
+
+    if is_unavailable:
+        # response_text：播报给用户，不暴露技术细节
+        user_reply = (
+            "当前无法读取机械臂状态，驱动程序可能尚未启动，请稍后再试。"
+            if state.language == "cn"
+            else "Unable to read arm status. The driver may not be running yet."
+        )
+    else:
+        # 正常：语音只做简短确认，完整数据在 status 字段供 LLM 规划运动
+        user_reply = (
+            "已读取到双臂关节状态。"
+            if state.language == "cn"
+            else "Arm status retrieved."
+        )
+
+    logger.info("get_arm_status: 状态已读取", unavailable=is_unavailable)
     return {
-        "ok": True,
+        "ok": not is_unavailable,
+        # status：完整技术数据，LLM 依此决定运动目标角度
         "status": status_text,
-        "state_updates": {"response_text": status_text},
+        # response_text：用户听到的简短语音
+        "state_updates": {"response_text": user_reply},
     }
