@@ -1,26 +1,19 @@
 """
 interfaces/ros2/arm_subscriber.py - 机械臂状态 ROS2 Subscriber 封装
 
-订阅 /arm/status 话题（bodyctrl_msgs/msg/MotorStatusMsg），
-在后台持续缓存最新状态，供工具函数随时查询。
+订阅 /arm/status 话题（bodyctrl_msgs/msg/MotorStatusMsg）。
+
+MotorStatusMsg 实际结构（来自 ros_arm_probe.py）：
+  msg.status : list[MotorStatus]
+    item.name : int    电机 ID
+    item.pos  : float  当前角度 (rad)
+    item.spd  : float  当前速度 (rpm 或 rad/s，视 SDK 版本)
+    item.tor  : float  当前力矩 (Nm)
+    item.temperature : float  温度 (°C)（可能没有此字段）
 
 关节布局（SDK 4.5 节，天轶 2.0 Pro）：
-  左臂  Motor ID 11~17：
-    11 = 左肩俯仰 (shoulder pitch)
-    12 = 左肩侧摆 (shoulder roll)
-    13 = 左肩旋转 (shoulder yaw)
-    14 = 左肘弯曲 (elbow)
-    15 = 左腕旋转 (wrist roll)
-    16 = 左腕俯仰 (wrist pitch)
-    17 = 左腕偏转 (wrist yaw)
-  右臂  Motor ID 21~27（对称同理）
-
-MotorStatusMsg 字段（估计，以实际 SDK 定义为准）：
-  name        : list[int]    电机 ID 列表
-  pos         : list[float]  当前角度 (rad)
-  spd         : list[float]  当前速度 (rad/s)
-  tor         : list[float]  当前力矩 (Nm)
-  temperature : list[float]  电机温度 (°C)
+  左臂  Motor ID 11~17（从肩到腕）
+  右臂  Motor ID 21~27（从肩到腕）
 """
 
 from __future__ import annotations
@@ -28,7 +21,6 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 try:
     import rclpy
@@ -43,7 +35,6 @@ try:
 except ImportError:
     _BODYCTRL_AVAILABLE = False
 
-# 两者同时可用才能订阅手臂状态
 _ROS2_AVAILABLE = _RCLPY_AVAILABLE and _BODYCTRL_AVAILABLE
 
 from src.robot_agent.bootstrap.logging import get_logger
@@ -53,7 +44,6 @@ logger = get_logger(__name__)
 # ── 电机 ID 分组 ────────────────────────────────────────────────
 LEFT_ARM_IDS  = list(range(11, 18))  # 11~17
 RIGHT_ARM_IDS = list(range(21, 28))  # 21~27
-ALL_ARM_IDS   = LEFT_ARM_IDS + RIGHT_ARM_IDS
 
 # 关节语义标签（索引 0~6 对应每侧臂从肩到腕）
 JOINT_LABELS = [
@@ -70,28 +60,27 @@ JOINT_LABELS = [
 @dataclass
 class ArmJointState:
     """单侧手臂的关节快照。"""
-    motor_ids:   list[int]   = field(default_factory=list)
-    positions:   list[float] = field(default_factory=list)   # rad
-    speeds:      list[float] = field(default_factory=list)   # rad/s
-    torques:     list[float] = field(default_factory=list)   # Nm
-    temperatures: list[float] = field(default_factory=list)  # °C
-    timestamp:   float        = 0.0                           # time.monotonic()
+    motor_ids:    list[int]   = field(default_factory=list)
+    positions:    list[float] = field(default_factory=list)   # rad
+    speeds:       list[float] = field(default_factory=list)
+    torques:      list[float] = field(default_factory=list)   # Nm
+    temperatures: list[float] = field(default_factory=list)   # °C
+    timestamp:    float       = 0.0
 
 
 @dataclass
 class BothArmsState:
     """双臂完整快照。"""
-    left:  ArmJointState = field(default_factory=ArmJointState)
-    right: ArmJointState = field(default_factory=ArmJointState)
-    is_valid: bool = False   # 是否已收到至少一帧真实数据
+    left:     ArmJointState = field(default_factory=ArmJointState)
+    right:    ArmJointState = field(default_factory=ArmJointState)
+    is_valid: bool = False
 
 
 class ArmSubscriber:
     """
     机械臂状态订阅器（进程级单例）。
 
-    在 ROS2 可用时后台 spin 订阅 /arm/status；
-    在模拟模式下返回全零占位数据。
+    后台线程 spin 持续更新缓存；非 ROS2 环境退化为离线模式。
     """
 
     def __init__(self) -> None:
@@ -129,14 +118,13 @@ class ArmSubscriber:
             10,
         )
 
-        # 后台线程持续 spin，不阻塞主线程
         self._spin_thread = threading.Thread(
             target=self._spin_loop, daemon=True, name="arm_status_spin"
         )
         self._spin_thread.start()
         logger.info("ArmSubscriber: 已启动后台订阅（/arm/status）")
 
-    # ── 内部回调 ────────────────────────────────────────────────
+    # ── 内部 ────────────────────────────────────────────────────
 
     def _spin_loop(self) -> None:
         try:
@@ -145,50 +133,52 @@ class ArmSubscriber:
             logger.error("ArmSubscriber: spin 异常退出", error=str(exc))
 
     def _on_status(self, msg: "MotorStatusMsg") -> None:  # type: ignore[name-defined]
-        """将收到的 MotorStatusMsg 分左右臂存入缓存。"""
-        # ── 第一帧：打印消息字段，便于确认 SDK 实际结构 ──────────
+        """
+        解析 MotorStatusMsg。
+
+        实际结构（来自 ros_arm_probe.py）：
+          for item in msg.status:
+              motor_id = int(item.name)
+              pos      = float(item.pos)
+        """
+        # 第一帧：打印字段帮助确认 SDK 结构
         if not self._state.is_valid:
             try:
-                fields = [f for f in dir(msg) if not f.startswith("_")]
-                logger.info(
-                    "ArmSubscriber: 首帧 MotorStatusMsg 可用字段",
-                    fields=fields,
-                )
+                if hasattr(msg, "status") and msg.status:
+                    sample = msg.status[0]
+                    fields = [f for f in dir(sample) if not f.startswith("_")]
+                    logger.info(
+                        "ArmSubscriber: 首帧 MotorStatus item 字段",
+                        fields=fields,
+                        total_items=len(msg.status),
+                    )
             except Exception:  # noqa: BLE001
                 pass
 
-        # ── 兼容多种字段名（SDK 版本差异）────────────────────────
-        # 尝试 name → motor_id → id，取第一个非空的
-        motor_ids_raw = (
-            getattr(msg, "name", None)
-            or getattr(msg, "motor_id", None)
-            or getattr(msg, "id", None)
-            or []
-        )
-        pos_raw  = getattr(msg, "pos",         getattr(msg, "position",    []))
-        spd_raw  = getattr(msg, "spd",         getattr(msg, "velocity",    []))
-        tor_raw  = getattr(msg, "tor",         getattr(msg, "effort",      []))
-        temp_raw = getattr(msg, "temperature", getattr(msg, "temp",        []))
-
-        if not motor_ids_raw:
-            logger.warning(
-                "ArmSubscriber: 无法从 MotorStatusMsg 提取电机 ID，跳过本帧",
-                tried_fields=["name", "motor_id", "id"],
-            )
+        # 构建 motor_id -> index 映射
+        items = getattr(msg, "status", [])
+        if not items:
+            logger.warning("ArmSubscriber: msg.status 为空，跳过本帧")
             return
 
-        id_map: dict[int, int] = {int(mid): i for i, mid in enumerate(motor_ids_raw)}
+        id_map: dict[int, "object"] = {}
+        for item in items:
+            try:
+                mid = int(item.name)
+                id_map[mid] = item
+            except Exception:  # noqa: BLE001
+                pass
 
         def _extract(ids: list[int]) -> ArmJointState:
             s = ArmJointState()
             s.timestamp = time.monotonic()
             for mid in ids:
-                idx = id_map.get(mid)
+                item = id_map.get(mid)
                 s.motor_ids.append(mid)
-                s.positions.append(    float(pos_raw[idx])  if idx is not None and idx < len(pos_raw)  else 0.0)
-                s.speeds.append(       float(spd_raw[idx])  if idx is not None and idx < len(spd_raw)  else 0.0)
-                s.torques.append(      float(tor_raw[idx])  if idx is not None and idx < len(tor_raw)  else 0.0)
-                s.temperatures.append( float(temp_raw[idx]) if idx is not None and idx < len(temp_raw) else 0.0)
+                s.positions.append(   float(getattr(item, "pos",         0.0)) if item else 0.0)
+                s.speeds.append(      float(getattr(item, "spd",         0.0)) if item else 0.0)
+                s.torques.append(     float(getattr(item, "tor",         0.0)) if item else 0.0)
+                s.temperatures.append(float(getattr(item, "temperature", 0.0)) if item else 0.0)
             return s
 
         left  = _extract(LEFT_ARM_IDS)
@@ -202,63 +192,46 @@ class ArmSubscriber:
     # ── 公开方法 ────────────────────────────────────────────────
 
     def get_state(self) -> BothArmsState:
-        """获取最新双臂状态快照（线程安全）。"""
+        """获取最新双臂状态快照（线程安全，返回深拷贝）。"""
+        import copy
         with self._lock:
-            # 返回深拷贝，避免外部意外修改缓存
-            import copy
             return copy.deepcopy(self._state)
 
     def get_formatted_status(self) -> str:
         """
-        返回适合直接呈现给用户或 LLM 的可读状态字符串。
-
-        示例输出：
-          【左臂关节状态】
-            J1 肩俯仰(shoulder_pitch)  : 位置=0.12 rad, 速度=0.00 rad/s, 力矩=1.23 Nm, 温度=32.1°C
-            ...
-          【右臂关节状态】
-            ...
+        返回面向 LLM 的可读状态字符串。
+        不可用时返回带 [ARM_STATUS_UNAVAILABLE] 标记的技术描述。
         """
         state = self.get_state()
 
         if self._sim_mode or not state.is_valid:
             reason = self._unavail_reason or "尚未收到真实数据"
-            # 返回面向 LLM 的技术描述（不直接播报给用户）
             return f"[ARM_STATUS_UNAVAILABLE] 原因：{reason}"
 
-        # 检查数据新鲜度
         now = time.monotonic()
-        age_left  = now - state.left.timestamp
-        age_right = now - state.right.timestamp
-        stale_warn = ""
-        if age_left > 2.0 or age_right > 2.0:
-            stale_warn = f"\n⚠️ 状态数据已有 {max(age_left, age_right):.1f} 秒未更新，可能不是最新。"
+        age = max(now - state.left.timestamp, now - state.right.timestamp)
+        stale_warn = f"\n⚠️ 数据已 {age:.1f}s 未更新" if age > 2.0 else ""
 
         def _arm_lines(arm: ArmJointState, side_name: str) -> str:
             lines = [f"【{side_name}关节状态】"]
             for i, (mid, label) in enumerate(zip(arm.motor_ids, JOINT_LABELS)):
-                pos  = arm.positions[i]   if i < len(arm.positions)    else 0.0
-                spd  = arm.speeds[i]      if i < len(arm.speeds)       else 0.0
-                tor  = arm.torques[i]     if i < len(arm.torques)      else 0.0
+                pos  = arm.positions[i]    if i < len(arm.positions)    else 0.0
+                spd  = arm.speeds[i]       if i < len(arm.speeds)       else 0.0
+                tor  = arm.torques[i]      if i < len(arm.torques)      else 0.0
                 temp = arm.temperatures[i] if i < len(arm.temperatures) else 0.0
                 lines.append(
                     f"  J{i+1} {label:<32s}: "
-                    f"位置={pos:+.3f} rad, "
-                    f"速度={spd:+.3f} rad/s, "
-                    f"力矩={tor:+.2f} Nm, "
-                    f"温度={temp:.1f}°C"
+                    f"pos={pos:+.3f}rad  spd={spd:+.2f}  tor={tor:+.2f}Nm  temp={temp:.1f}°C"
                 )
             return "\n".join(lines)
 
-        result = (
+        return (
             _arm_lines(state.left,  "左臂")
             + "\n\n"
             + _arm_lines(state.right, "右臂")
             + stale_warn
         )
-        return result
 
     def destroy(self) -> None:
-        """释放 ROS2 节点资源。"""
         if not self._sim_mode:
             self._node.destroy_node()

@@ -35,19 +35,13 @@ from src.robot_agent.bootstrap.logging import get_logger
 
 logger = get_logger(__name__)
 
-# 手指名称列表（与 SDK 中 JointState.name 对应）
-FINGER_NAMES: list[str] = [
-    "little",      # 小指    ID=1
-    "ring",        # 无名指  ID=2
-    "middle",      # 中指    ID=3
-    "index",       # 食指    ID=4
-    "thumb_bend",  # 拇指弯曲 ID=5
-    "thumb_rot",   # 拇指旋转 ID=6
-]
+# 手指通道 name（与 SDK JointState.name 完全一致，数字字符串）
+# 顺序：1=小指, 2=无名指, 3=中指, 4=食指, 5=拇指弯曲, 6=拇指旋转
+FINGER_NAMES: list[str] = ["1", "2", "3", "4", "5", "6"]
 
-# SDK 角度范围
+# 归一化范围：0.0（张开）~ 1.0（合拢）
 ANGLE_MIN = 0.0
-ANGLE_MAX = 1000.0
+ANGLE_MAX = 1.0
 
 
 class HandPublisher:
@@ -99,17 +93,16 @@ class HandPublisher:
         if len(angles) != 6:
             raise ValueError(f"angles 必须包含 6 个元素，当前为 {len(angles)}")
 
-        # 归一化转换为 SDK 原始值，并夹紧到合法范围
-        raw = [
-            max(ANGLE_MIN, min(ANGLE_MAX, a * ANGLE_MAX))
+        # 夹紧到 0~1 范围
+        clamped = [
+            max(ANGLE_MIN, min(ANGLE_MAX, float(a)))
             for a in angles
         ]
 
         logger.info(
             "HandPublisher.set_hand_angles",
             side=side,
-            angles=[round(a, 3) for a in angles],
-            raw=[round(r, 1) for r in raw],
+            angles=[round(a, 3) for a in clamped],
             sim=self._sim_mode,
         )
 
@@ -117,8 +110,9 @@ class HandPublisher:
             return
 
         msg = JointState()
-        msg.name     = FINGER_NAMES
-        msg.position = raw
+        msg.header.stamp = self._node.get_clock().now().to_msg()
+        msg.name     = FINGER_NAMES          # ["1","2","3","4","5","6"]
+        msg.position = clamped              # 直接发 0~1 归一化值
 
         with self._lock:
             if side == "left":

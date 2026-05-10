@@ -175,9 +175,9 @@ async def move_arm_joints(
     def _send() -> None:
         pub = _get_arm_pub()
         if side in ("left", "both"):
-            pub.send_position(LEFT_ARM_IDS, positions, kp=kp, kd=kd)
+            pub.send_position(LEFT_ARM_IDS, positions, speed_rpm=10.0, current_a=1.0)
         if side in ("right", "both"):
-            pub.send_position(RIGHT_ARM_IDS, positions, kp=kp, kd=kd)
+            pub.send_position(RIGHT_ARM_IDS, positions, speed_rpm=10.0, current_a=1.0)
 
     await asyncio.to_thread(_send)
 
