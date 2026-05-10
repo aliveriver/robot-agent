@@ -8,7 +8,33 @@
   2. /arm/status 是否有数据（以及 MotorStatusMsg 字段结构）
   3. /arm/cmd_pos 是否存在
   4. 向 /arm/cmd_pos 发一条 hold-current 指令（不移动，只重发当前位置）
+
+用法：
+  # 方式一：source workspace 后直接跑
+  source /opt/PARTITIONS/A/ros2ws/install/setup.bash
+  python diagnose_arm.py
+
+  # 方式二：通过 ROS2_WS 环境变量让脚本自动注入路径（无需 source）
+  ROS2_WS=/opt/PARTITIONS/A/ros2ws python diagnose_arm.py
 """
+
+# ── ROS2 workspace Python 路径注入（与 app.py 逻辑相同）──────────
+# 必须在任何 bodyctrl_msgs 导入之前执行
+import glob as _glob
+import os as _os
+import sys as _sys
+
+_ROS2_WS = _os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
+_injected = []
+for _p in _glob.glob(f"{_ROS2_WS}/install/*/local/lib/python*/dist-packages"):
+    if _p not in _sys.path:
+        _sys.path.insert(0, _p)
+        _injected.append(_p)
+if _injected:
+    print(f"[sys.path] 已注入 {len(_injected)} 个 workspace 路径（ROS2_WS={_ROS2_WS}）")
+else:
+    print(f"[sys.path] 未找到可注入路径，ROS2_WS={_ROS2_WS}（可能已 source 或路径错误）")
+# ─────────────────────────────────────────────────────────────────
 
 import sys
 import time
@@ -32,6 +58,7 @@ try:
 except ImportError as e:
     print(f"  [FAIL] bodyctrl_msgs 不可导入: {e}")
     print("         请在 ROS2 workspace 编译后执行 source install/setup.bash")
+    print(f"         或使用: ROS2_WS=/opt/PARTITIONS/A/ros2ws python diagnose_arm.py")
     sys.exit(1)
 
 try:
@@ -90,18 +117,23 @@ else:
             sample = items[0]
             fields = [f for f in dir(sample) if not f.startswith("_")]
             print(f"  [INFO] MotorStatus item 字段: {fields}")
-            print(f"  [INFO] 示例: name={getattr(sample,'name','N/A')}  "
-                  f"pos={getattr(sample,'pos','N/A'):.4f}  "
-                  f"spd={getattr(sample,'spd','N/A'):.4f}  "
-                  f"tor={getattr(sample,'tor','N/A'):.4f}")
+            _name = getattr(sample, 'name', 'N/A')
+            _pos  = float(getattr(sample, 'pos',     0.0))
+            _spd  = float(getattr(sample, 'speed',   getattr(sample, 'spd',     0.0)))
+            _cur  = float(getattr(sample, 'current', getattr(sample, 'tor',     0.0)))
+            _tmp  = float(getattr(sample, 'temperature', 0.0))
+            print(f"  [INFO] 示例: name={_name}  pos={_pos:.4f}  speed={_spd:.4f}  current={_cur:.4f}  temp={_tmp:.1f}")
 
             # 打印所有电机 ID 和当前位置
             print()
             print("  电机 ID -> 当前位置（rad）：")
             for item in items:
-                mid = getattr(item, "name", "?")
-                pos = getattr(item, "pos", 0.0)
-                print(f"    Motor {mid:>3} : {pos:+.4f} rad")
+                mid  = getattr(item, "name", "?")
+                pos  = float(getattr(item, "pos", 0.0))
+                spd  = float(getattr(item, "speed",   getattr(item, "spd",  0.0)))
+                cur  = float(getattr(item, "current", getattr(item, "tor",  0.0)))
+                temp = float(getattr(item, "temperature", 0.0))
+                print(f"    Motor {str(mid):>3} : pos={pos:+.4f} rad  speed={spd:+.4f}  current={cur:+.4f}  temp={temp:.1f}°C")
 
 # ── 3. 测试发送 hold-current 到 /arm/cmd_pos ───────────────────
 print()
