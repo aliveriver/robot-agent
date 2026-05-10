@@ -163,6 +163,7 @@ class Settings(BaseSettings):
     lang: str = Field(...)
     log_level: str = Field(...)
     env: str = Field(...)
+    ignore_non_chinese_input: bool = Field(False)
 
     llm: LLMSettings = Field(default_factory=LLMSettings)
     tts: TTSSettings = Field(default_factory=TTSSettings)
@@ -201,6 +202,7 @@ class Settings(BaseSettings):
             lang=app_section["lang"],
             log_level=app_section["log_level"],
             env=app_section["env"],
+            ignore_non_chinese_input=app_section.get("ignore_non_chinese_input", False),
             llm=LLMSettings(**yaml_data.get("llm", {})),
             tts=TTSSettings(**yaml_data.get("tts", {})),
             asr=ASRSettings(**yaml_data.get("asr", {})),

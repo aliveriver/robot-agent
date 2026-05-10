@@ -21,6 +21,37 @@ logger = get_logger(__name__)
 
 PROMPT_DIR = Path(__file__).resolve().parents[4] / "configs" / "prompts"
 
+ACTION_TOOL_NAMES = {"move_arm_joints", "control_hand", "control_both_hands", "reset_arms"}
+
+ACTION_CLAIM_MARKERS = (
+    "\u6b63\u5728",
+    "\u73b0\u5728\u5728",
+    "\u770b\u6211\u7684",
+    "\u4f38\u5c55",
+    "\u6293\u53d6\u6f14\u793a",
+    "\u73b0\u573a\u6f14\u793a",
+    "\u7075\u5de7\u624b\u505a",
+    "\u5df2\u79fb\u52a8",
+    "\u5df2\u6267\u884c",
+    "\u5df2\u7ecf\u79fb\u52a8",
+    "\u5df2\u7ecf\u6267\u884c",
+    "\u5b8c\u6210\u52a8\u4f5c",
+    "\u5b8c\u6210\u624b\u52bf",
+    "i am moving",
+    "i'm moving",
+    "i am doing",
+    "i'm doing",
+    "watch me",
+    "performing",
+    "has moved",
+    "have moved",
+)
+
+SAFE_NO_ACTION_REPLY = {
+    "cn": "\u6211\u8fd8\u6ca1\u6709\u6267\u884c\u5b9e\u9645\u52a8\u4f5c\u3002\u5982\u679c\u8981\u6211\u52a8\u624b\u81c2\u6216\u7075\u5de7\u624b\uff0c\u8bf7\u8bf4\u660e\u5177\u4f53\u52a8\u4f5c\uff0c\u6211\u4f1a\u5148\u8c03\u7528\u63a7\u5236\u5de5\u5177\u3002",
+    "en": "I have not performed a real motion yet. Please specify the arm or hand motion, and I will call the control tool first.",
+}
+
 FALLBACK_RESPONSES: dict[str, dict[str, str]] = {
     "cn": {
         "happy": "听起来很不错。",
@@ -46,6 +77,26 @@ GENERIC_FALLBACK: dict[str, str] = {
     "cn": "抱歉，我刚刚没连上大模型，但我还在。你可以再说一遍。",
     "en": "Sorry, I could not reach the model just now, but I'm still here. Please say it again.",
 }
+
+
+def _has_successful_action_tool(state: AgentState) -> bool:
+    """True only when this turn actually executed a physical action tool."""
+    for result in state.tool_results:
+        data = result.get("data")
+        tool_succeeded = not isinstance(data, dict) or data.get("ok", True)
+        if result.get("ok") and tool_succeeded and result.get("tool") in ACTION_TOOL_NAMES:
+            return True
+    return False
+
+
+def _looks_like_action_claim(text: str) -> bool:
+    """Detect replies that claim the robot is/was physically acting."""
+    lowered = text.lower()
+    return any(marker in lowered for marker in ACTION_CLAIM_MARKERS)
+
+
+def _safe_language(language: str) -> str:
+    return language if language in {"cn", "en"} else "cn"
 
 
 def _load_prompt(filename: str) -> str:
@@ -229,6 +280,18 @@ async def response_gen(state: AgentState) -> dict:
     else:
         source = "llm"
 
+    guarded_action_claim = False
+    if _looks_like_action_claim(response_text) and not _has_successful_action_tool(state):
+        lang = _safe_language(state.language)
+        logger.warning(
+            "response_gen: blocked unsupported physical action claim",
+            original=response_text,
+            tool_results=[result.get("tool") for result in state.tool_results],
+        )
+        response_text = SAFE_NO_ACTION_REPLY[lang]
+        source = "guard"
+        guarded_action_claim = True
+
     logger.info("response_gen: reply generated", length=len(response_text), source=source)
     return {
         "response_text": response_text,
@@ -236,5 +299,6 @@ async def response_gen(state: AgentState) -> dict:
             "source": source,
             "model": getattr(model, "model_name", None),
             "multimodal": has_image,
+            "guarded_action_claim": guarded_action_claim,
         },
     }

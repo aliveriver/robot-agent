@@ -55,6 +55,11 @@ logger = get_logger(__name__)
 SESSION_ID = "session_" + uuid.uuid4().hex[:8]
 
 
+def _contains_chinese(text: str) -> bool:
+    """Return True when text contains at least one CJK unified ideograph."""
+    return any("\u4e00" <= ch <= "\u9fff" for ch in text)
+
+
 def _configure_pulse_audio() -> None:
     """如果 pactl 可用，在 Linux 上配置 PulseAudio 默认设置。"""
     if os.name != "posix":
@@ -255,6 +260,14 @@ async def main() -> None:
 
             if not is_valid_cjk_latin_text(cleaned_text):
                 logger.debug("app: non-CJK/Latin text filtered", text=cleaned_text[:80])
+                return
+
+            if (
+                settings.lang == "cn"
+                and settings.ignore_non_chinese_input
+                and not _contains_chinese(cleaned_text)
+            ):
+                logger.info("app: non-Chinese ASR text ignored", text=cleaned_text[:80])
                 return
 
             if runtime_session.wake_state == "awake" and is_stop_text(cleaned_text, settings.lang):
