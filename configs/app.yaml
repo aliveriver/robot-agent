@@ -1,0 +1,123 @@
+# ─────────────────────────────────────────────────────────────
+# configs/app.yaml - Robot Agent 主配置文件
+#
+# 职责：存放所有业务配置。密钥和机器特定值由 .env 覆盖。
+# 配置优先级：环境变量 > .env > 本文件
+# ─────────────────────────────────────────────────────────────
+
+app:
+  lang: cn
+  log_level: INFO
+  env: development
+  ignore_non_chinese_input: true
+
+# ── LLM ──────────────────────────────────────────────────────
+llm:
+  api_url: https://yinli.one/v1
+  api_key: ""                          # 由 .env LLM_API_KEY 覆盖
+  model: gpt-4o-2024-11-20
+  multimodal_model: gpt-4o-2024-11-20
+  max_tokens: 512
+  temperature: 0.7
+  timeout: 30
+
+# ── TTS (Minimax WebSocket) ───────────────────────────────────
+tts:
+  provider: minimax
+  api_url: https://api.minimaxi.com/v1/t2a_v2
+  ws_url: wss://api.minimaxi.com/ws/v1/t2a_v2
+  api_key: ""                          # 由 .env TTS_API_KEY 覆盖
+  model: speech-2.6-turbo
+  default_voice: female-shaonv
+  speed: 1.0
+
+# ── ASR (Sherpa-ONNX SenseVoice) ─────────────────────────────
+asr:
+  provider: sherpa
+  model_dir: sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17
+  tokens_path: sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/tokens.txt
+
+# ── 音频采集参数 ──────────────────────────────────────────────
+# input_device / output_device 留空时使用系统默认，也可在 .env 中覆盖
+audio:
+  sample_rate: 16000
+  channels: 1
+  blocksize: 1600
+  input_device: ""
+  output_device: ""
+  input_gain: 0.35
+  noise_floor: 0.01
+  speech_threshold: 0.03
+  max_silence_sec: 0.45
+  max_segment_sec: 8.0
+  min_segment_sec: 0.3
+
+# ── 唤醒词 / 退出词 / 打断词 ──────────────────────────────────
+wake:
+  words_cn:
+    - "你好"
+    - "天轶"
+  words_en:
+    - "hello"
+    - "hi"
+  exit_words_cn:
+    - "再见"
+    - "休息"
+    - "拜拜"
+  exit_words_en:
+    - "goodbye"
+    - "bye"
+    - "rest"
+  stop_words_cn:
+    - "停"
+    - "别说了"
+    - "闭嘴"
+    - "安静"
+  stop_words_en:
+    - "stop"
+    - "quiet"
+    - "shut up"
+
+# ── 记忆系统 ──────────────────────────────────────────────────
+memory:
+  short_term_max_turns: 15
+  summary_every_n_turns: 8
+  episodic_importance_threshold: 0.7
+
+# ── 知识库（RAG） ─────────────────────────────────────────────
+knowledge:
+  chunk_size: 512
+  chunk_overlap: 64
+  top_k: 5
+
+# ── 情感分析 ──────────────────────────────────────────────────
+sentiment:
+  enabled: true
+  model_dir: ./emotion_models/roberta_base_finetuned_model_onnx
+
+# ── 数据库 / 持久化 ───────────────────────────────────────────
+database:
+  sqlite_path: data/robot.db
+  chroma_persist_dir: data/chroma
+
+# ── 视觉 / 相机 ───────────────────────────────────────────────
+vision:
+  camera_topic: /camera/color/image_raw
+  capture_timeout: 2.0
+  save_dir: data/camera
+  local_device_index: 0
+  prefer_ros: true
+  always_capture: true
+  auto_start_node: true
+  launch_command: "source install/setup.bash && ros2 launch orbbec_camera gemini_330_series.launch.py"
+  launch_cwd: /home/nvidia/orbbec_camera_ros2
+  startup_delay_sec: 3.0
+
+# ── 声音克隆服务 ──────────────────────────────────────────────
+voice_clone:
+  base_url: https://kno-abkzopl0tfqssuv63-3d4qge3e-custom.service.onethingrobot.com
+
+# ── WebSocket 遥控服务 ────────────────────────────────────────
+websocket:
+  host: "0.0.0.0"
+  port: 8765
