@@ -35,4 +35,4 @@ if conda activate agent 2>/dev/null; then
     echo "[run.sh] conda env: agent"
 fi
 
-exec python -m src.robot_agent.app "$@"
+# exec python -m src.robot_agent.app "$@"
