@@ -5,6 +5,7 @@
 import glob as _glob
 import os as _os
 import sys as _sys
+import json # 【新增】用于保存文件
 
 _ROS2_WS = _os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
 _injected = []
@@ -31,7 +32,7 @@ except ImportError as e:
 LEFT_ARM_IDS = [11, 12, 13, 14, 15, 16, 17]
 RIGHT_ARM_IDS = [21, 22, 23, 24, 25, 26, 27]
 ALL_ARM_IDS = LEFT_ARM_IDS + RIGHT_ARM_IDS
-
+record_timer = 0.1
 class FullBodyNode(Node):
     def __init__(self):
         super().__init__('full_body_teach_node')
@@ -57,12 +58,18 @@ class FullBodyNode(Node):
         
         self.mode = 'idle' # 'idle', 'limp', 'lock'
         
+        # 【新增】轨迹存储容器
+        self.trajectory_data = [] 
+        
         # 控制循环 (10Hz) - 统一管理全身发送
         self.ctrl_timer = self.create_timer(0.1, self.ctrl_cb)
         
         # 打印循环
         self.last_print_time = time.time()
-        self.print_timer = self.create_timer(0.5, self.print_cb)
+        self.print_timer = self.create_timer(record_timer, self.print_cb)
+
+        # 【新增】录制循环 (每0.1s记录一次limp状态)
+        self.record_timer = self.create_timer(record_timer, self.record_cb)
 
     def arm_status_cb(self, msg):
         for item in msg.status:
@@ -122,14 +129,11 @@ class FullBodyNode(Node):
                 item.spd = 0.0
                 item.cur = 0.0 
             elif self.mode == 'lock':
+                # 纯位置环保持。不断发送目标坐标，给一个常规的安全电流上限和速度上限
                 item.pos = self.locked_arm_pos[mid]
-                item.spd = 10.0
+                item.spd = 3.14  # 常规速度上限 (约半圈/秒)，防止瞬间抽动
+                item.cur = 2.0   # 常规电流上限 (2.0A)，让电机自己计算需要的真实电流
                 
-                # 针对大关节（肩膀、大臂）给予更大的保持电流
-                if mid in [11, 12, 21, 22]:
-                    item.cur = 3.0  # 给大关节 4.0A 的力量对抗重力
-                else:
-                    item.cur = 1.5  # 小关节保持 1.5A 足矣
             arm_msg.cmds.append(item)
         self.arm_cmd_pub.publish(arm_msg)
 
@@ -141,10 +145,21 @@ class FullBodyNode(Node):
             h_msg.position = self.target_hand_pos[hand_side]
             pub.publish(h_msg)
 
+    # 【新增】录制回调函数
+    def record_cb(self):
+        if self.mode == 'limp':
+            frame = {
+                "arms": self.current_arm_pos.copy(),
+                "lhand": self.current_hand_pos['left'].copy(),
+                "rhand": self.current_hand_pos['right'].copy()
+            }
+            self.trajectory_data.append(frame)
+
     def print_cb(self):
         now = time.time()
-        if self.mode == 'limp' and (now - self.last_print_time >= 20.0):
-            self.do_print_status("👁️ [松弛监测 - 每2秒刷新]")
+        if self.mode == 'limp' and (now - self.last_print_time >= 2.0):
+            # 顺便在打印时提示录制了多少帧
+            self.do_print_status(f"👁️ [松弛监测 - 每2秒刷新] (后台已录制: {len(self.trajectory_data)} 帧)")
             self.last_print_time = now
         elif self.mode == 'lock' and (now - self.last_print_time >= 30.0):
             self.do_print_status("💤 [紧绷保持 - 每30秒心跳]")
@@ -171,14 +186,16 @@ def main():
     spin_thread.start()
 
     print("\n" + "★"*60)
-    print(" 🤖 天轶 2.0 Pro 【全身上半身示教 + 手指调参控制台】")
+    print(f" 🤖 天轶 2.0 Pro 【全身上半身示教 + 后台{record_timer}s录制】")
     print("★"*60)
     print("指令说明:")
-    print("  [limp]  - 双臂松弛 (可拖动)")
-    print("  [lock]  - 双臂紧绷 (锁死当前姿态)")
+    print(f"  [limp]  - 双臂松弛 (可拖动，且后台开始 {record_timer}s/帧录制)")
+    print("  [lock]  - 双臂紧绷 (纯位置环保持锁定，暂停录制)")
     print("  [r 0 0 0 0 0 0] - 控制右手 (小|无名|中|食|拇弯|拇旋)")
     print("  [l 0 0 0 0 0 0] - 控制左手 (0=紧握, 100=全开)")
     print("  [b 0 0 0 0 0 0] - 同时控制双手")
+    print("  [save]  - 保存轨迹数据到文件")
+    print("  [clear] - 清空已录制的轨迹数据")
     print("  [q] - 退出程序")
     print("="*60)
     
@@ -187,7 +204,6 @@ def main():
             cmd_line = input("> ").strip().lower()
             if not cmd_line:
                 continue
-                
             parts = cmd_line.split()
             cmd = parts[0]
             
@@ -195,13 +211,25 @@ def main():
                 break
             elif cmd == 'limp':
                 node.set_limp()
-                print("✅ [双臂] 已进入松弛拖动模式 (每2秒打印数据)")
+                print(f"✅ [双臂] 已进入松弛拖动模式 (后台正以{record_timer}s/帧录制中...)")
             elif cmd == 'lock':
                 node.set_lock()
-                print("🔒 [双臂] 已紧绷锁死 (每30秒打印心跳)")
+                print("🔒 [双臂] 已进入位置环锁定状态 (暂停录制)")
+            # 【新增】保存功能
+            elif cmd == 'save':
+                save_path = _os.path.join(_os.getcwd(), 'path','trajectory.json')
+                try:
+                    with open(save_path, 'w', encoding='utf-8') as f:
+                        json.dump(node.trajectory_data, f, indent=2)
+                    print(f"💾 [成功] 动作轨迹已保存至: {save_path} (共 {len(node.trajectory_data)} 帧)")
+                except Exception as e:
+                    print(f"❌ [失败] 无法保存轨迹文件: {e}")
+            # 【新增】清空功能
+            elif cmd == 'clear':
+                node.trajectory_data.clear()
+                print("🗑️ 内存中的录制轨迹已清空！")
             elif cmd in ['r', 'l', 'b']:
                 if node.mode == 'idle':
-                    # 如果还没激活模式，自动帮用户切到 limp 激活后台发送
                     node.set_limp()
                     
                 if len(parts) == 7:
