@@ -1,5 +1,5 @@
 """
-interfaces/websocket/server.py - 手机 App 遥控 WebSocket 服务
+interfaces/websocket/server.py - 手机 App 遥控 WebSocket 服务 (FastAPI 版)
 
 在局域网内暴露 WebSocket 端口，接收来自手机 App 的控制指令，
 调用已有的 tool 函数执行动作，并推送机器人状态。
@@ -17,8 +17,9 @@ import json
 import time
 from typing import Any, Set
 
-import websockets
-from websockets.server import WebSocketServerProtocol
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
+import uvicorn
 
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.graph.state import AgentState
@@ -27,11 +28,12 @@ from src.robot_agent.settings import settings
 
 logger = get_logger(__name__)
 
-_clients: Set[WebSocketServerProtocol] = set()
-_server = None
+app = FastAPI(title="Robot Remote Control")
+_clients: Set[WebSocket] = set()
+_server_task: asyncio.Task | None = None
+
 
 async def _build_state() -> AgentState:
-    """构造一个最小 AgentState 供 tool 函数使用。"""
     return AgentState(
         session_id="ws_remote",
         user_id="app_user",
@@ -98,7 +100,6 @@ async def _action_list_gestures(_params: dict) -> dict:
 
 
 async def _action_say(params: dict) -> dict:
-    """让机器人说一句话（通过 TTS）。"""
     text = params.get("text", "")
     if not text:
         return {"ok": False, "error": "text is required"}
@@ -109,13 +110,11 @@ async def _action_say(params: dict) -> dict:
 
 
 async def _action_wake(_params: dict) -> dict:
-    """唤醒机器人。"""
     runtime_session.wake_state = "awake"
     return {"ok": True, "wake_state": "awake"}
 
 
 async def _action_sleep(_params: dict) -> dict:
-    """让机器人休眠。"""
     runtime_session.wake_state = "sleep"
     return {"ok": True, "wake_state": "sleep"}
 
@@ -134,64 +133,27 @@ _ACTION_HANDLERS: dict[str, Any] = {
 }
 
 
-# ── WebSocket 连接处理 ────────────────────────────────────────────
+# ── HTTP endpoints ───────────────────────────────────────────────
 
-async def _handle_command(ws: WebSocketServerProtocol, msg: dict) -> None:
-    """处理单条指令并回复结果。"""
-    action = msg.get("action", "")
-    params = msg.get("params", {})
-    req_id = msg.get("id", "")
+@app.get("/ping")
+async def http_ping():
+    return JSONResponse({"ok": True, "name": "天轶 2.0 Pro", "ws_port": 8765})
 
-    handler = _ACTION_HANDLERS.get(action)
-    if handler is None:
-        await _send(ws, {
-            "type": "result",
-            "id": req_id,
-            "ok": False,
-            "error": f"unknown action: {action}",
-        })
-        return
 
+# ── WebSocket endpoint ───────────────────────────────────────────
+
+async def _send(ws: WebSocket, data: dict) -> None:
     try:
-        result = await handler(params)
-        await _send(ws, {
-            "type": "result",
-            "id": req_id,
-            "ok": True,
-            "data": result,
-        })
-    except Exception as exc:
-        logger.exception("ws: command failed", action=action, error=str(exc))
-        await _send(ws, {
-            "type": "result",
-            "id": req_id,
-            "ok": False,
-            "error": str(exc),
-        })
-
-
-async def _send(ws: WebSocketServerProtocol, data: dict) -> None:
-    try:
-        await ws.send(json.dumps(data, ensure_ascii=False))
-    except websockets.exceptions.ConnectionClosed:
+        await ws.send_text(json.dumps(data, ensure_ascii=False))
+    except Exception:
         pass
 
 
-async def broadcast(event: str, data: dict) -> None:
-    """向所有已连接客户端广播事件。"""
-    if not _clients:
-        return
-    msg = json.dumps({"type": "event", "event": event, "data": data}, ensure_ascii=False)
-    await asyncio.gather(
-        *[client.send(msg) for client in _clients],
-        return_exceptions=True,
-    )
-
-
-async def _ws_handler(ws: WebSocketServerProtocol) -> None:
-    """单个 WebSocket 连接的生命周期处理。"""
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket):
+    await ws.accept()
     _clients.add(ws)
-    remote = ws.remote_address
+    remote = ws.client
     logger.info("ws: client connected", remote=str(remote))
 
     try:
@@ -201,7 +163,8 @@ async def _ws_handler(ws: WebSocketServerProtocol) -> None:
             "data": {"robot_name": "天轶 2.0 Pro", "actions": list(_ACTION_HANDLERS.keys())},
         })
 
-        async for raw in ws:
+        while True:
+            raw = await ws.receive_text()
             try:
                 msg = json.loads(raw)
             except json.JSONDecodeError:
@@ -210,30 +173,63 @@ async def _ws_handler(ws: WebSocketServerProtocol) -> None:
 
             msg_type = msg.get("type", "command")
             if msg_type == "command":
-                await _handle_command(ws, msg)
+                action = msg.get("action", "")
+                params = msg.get("params", {})
+                req_id = msg.get("id", "")
+
+                handler = _ACTION_HANDLERS.get(action)
+                if handler is None:
+                    await _send(ws, {"type": "result", "id": req_id, "ok": False, "error": f"unknown action: {action}"})
+                    continue
+
+                try:
+                    result = await handler(params)
+                    await _send(ws, {"type": "result", "id": req_id, "ok": True, "data": result})
+                except Exception as exc:
+                    logger.exception("ws: command failed", action=action, error=str(exc))
+                    await _send(ws, {"type": "result", "id": req_id, "ok": False, "error": str(exc)})
             elif msg_type == "ping":
                 await _send(ws, {"type": "pong", "ts": time.time()})
             else:
                 await _send(ws, {"type": "result", "ok": False, "error": f"unknown type: {msg_type}"})
-    except websockets.exceptions.ConnectionClosed:
+
+    except WebSocketDisconnect:
         pass
+    except Exception as exc:
+        logger.debug("ws: connection error", error=str(exc))
     finally:
         _clients.discard(ws)
         logger.info("ws: client disconnected", remote=str(remote))
 
 
+async def broadcast(event: str, data: dict) -> None:
+    if not _clients:
+        return
+    msg = json.dumps({"type": "event", "event": event, "data": data}, ensure_ascii=False)
+    for client in list(_clients):
+        try:
+            await client.send_text(msg)
+        except Exception:
+            _clients.discard(client)
+
+
+# ── Server lifecycle ─────────────────────────────────────────────
+
 async def start_server(host: str = "0.0.0.0", port: int = 8765) -> None:
-    """启动 WebSocket 服务器（非阻塞，作为后台任务运行）。"""
-    global _server
-    _server = await websockets.serve(_ws_handler, host, port)
-    logger.info("ws: server started", host=host, port=port)
+    global _server_task
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    server = uvicorn.Server(config)
+    _server_task = asyncio.create_task(server.serve())
+    logger.info("ws: FastAPI server started", host=host, port=port)
 
 
 async def stop_server() -> None:
-    """停止 WebSocket 服务器。"""
-    global _server
-    if _server is not None:
-        _server.close()
-        await _server.wait_closed()
-        _server = None
+    global _server_task
+    if _server_task is not None:
+        _server_task.cancel()
+        try:
+            await _server_task
+        except asyncio.CancelledError:
+            pass
+        _server_task = None
         logger.info("ws: server stopped")
