@@ -14,7 +14,7 @@ app:
 # ── LLM ──────────────────────────────────────────────────────
 llm:
   api_url: https://yinli.one/v1
-  api_key: ""                          # 由 .env LLM_API_KEY 覆盖
+  # api_key: ""                          # 由 .env LLM_API_KEY 覆盖
   model: gpt-4o-2024-11-20
   multimodal_model: gpt-4o-2024-11-20
   max_tokens: 512
@@ -26,7 +26,7 @@ tts:
   provider: minimax
   api_url: https://api.minimaxi.com/v1/t2a_v2
   ws_url: wss://api.minimaxi.com/ws/v1/t2a_v2
-  api_key: ""                          # 由 .env TTS_API_KEY 覆盖
+  # api_key: ""                          # 由 .env TTS_API_KEY 覆盖
   model: speech-2.6-turbo
   default_voice: female-shaonv
   speed: 1.0
