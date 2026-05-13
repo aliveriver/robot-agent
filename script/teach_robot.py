@@ -32,7 +32,7 @@ except ImportError as e:
 LEFT_ARM_IDS = [11, 12, 13, 14, 15, 16, 17]
 RIGHT_ARM_IDS = [21, 22, 23, 24, 25, 26, 27]
 ALL_ARM_IDS = LEFT_ARM_IDS + RIGHT_ARM_IDS
-record_timer = 0.1
+record_timer = 100
 class FullBodyNode(Node):
     def __init__(self):
         super().__init__('full_body_teach_node')
@@ -159,7 +159,7 @@ class FullBodyNode(Node):
         now = time.time()
         if self.mode == 'limp' and (now - self.last_print_time >= 2.0):
             # 顺便在打印时提示录制了多少帧
-            self.do_print_status(f"👁️ [松弛监测 - 每2秒刷新] (后台已录制: {len(self.trajectory_data)} 帧)")
+            # self.do_print_status(f"👁️ [松弛监测 - 每2秒刷新] (后台已录制: {len(self.trajectory_data)} 帧)")
             self.last_print_time = now
         elif self.mode == 'lock' and (now - self.last_print_time >= 30.0):
             self.do_print_status("💤 [紧绷保持 - 每30秒心跳]")
@@ -172,11 +172,11 @@ class FullBodyNode(Node):
         r_deg = [round(math.degrees(self.current_arm_pos[mid]), 2) for mid in RIGHT_ARM_IDS]
         lh_ratio = [round(v, 3) for v in self.current_hand_pos['left']]
         rh_ratio = [round(v, 3) for v in self.current_hand_pos['right']]
-        print(f"🔹 【左臂】 角度[deg]: {l_deg}")
-        print(f"🔸 【右臂】 角度[deg]: {r_deg}")
-        print(f"🖐️ 【左手】 比例(0-1): {lh_ratio}")
-        print(f"🖐️ 【右手】 比例(0-1): {rh_ratio}")
-        print(f"{'-'*55}")
+        # print(f"🔹 【左臂】 角度[deg]: {l_deg}")
+        # print(f"🔸 【右臂】 角度[deg]: {r_deg}")
+        # print(f"🖐️ 【左手】 比例(0-1): {lh_ratio}")
+        # print(f"🖐️ 【右手】 比例(0-1): {rh_ratio}")
+        # print(f"{'-'*55}")
         print("> ", end="", flush=True) # 保持输入提示符
 
 def main():
@@ -229,8 +229,8 @@ def main():
                 node.trajectory_data.clear()
                 print("🗑️ 内存中的录制轨迹已清空！")
             elif cmd in ['r', 'l', 'b']:
-                if node.mode == 'idle':
-                    node.set_limp()
+                # if node.mode == 'idle':
+                #     node.set_limp()
                     
                 if len(parts) == 7:
                     try:
