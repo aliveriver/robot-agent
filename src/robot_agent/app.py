@@ -209,6 +209,13 @@ async def main() -> None:
         _configure_audio_devices()
         camera_launcher.start()
 
+        # ── 启动 WebSocket 遥控服务 ──────────────────────────────────
+        from src.robot_agent.interfaces.websocket.server import start_server as ws_start, stop_server as ws_stop
+        from src.robot_agent.interfaces.websocket.discovery import start_discovery, stop_discovery
+        ws_port = int(os.getenv("WS_PORT", "8765"))
+        await ws_start(host="0.0.0.0", port=ws_port)
+        await start_discovery(ws_port=ws_port)
+
         asr = SherpaRecognizer()
         asr.initialize()
 
@@ -311,6 +318,8 @@ async def main() -> None:
         if mic is not None:
             mic.stop()
         camera_launcher.stop()
+        await ws_stop()
+        await stop_discovery()
         for future in list(pending_tasks):
             future.cancel()
 
