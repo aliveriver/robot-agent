@@ -18,9 +18,16 @@ class Player:
         self.on_progress = on_progress
         self.playing = False
         self.progress = 0.0
+        self.current_loop = 0
+        self.total_loops = 1
         self._task: Optional[asyncio.Task] = None
 
-    async def play(self, trajectory_id: int, speed: float = 1.0):
+    async def play(self, trajectory_id: int, speed: float = 1.0,
+                   repeat: int = 1, interval_sec: float = 0.0):
+        """
+        repeat: 重复次数，0 表示无限循环
+        interval_sec: 每次重复之间的间隔（秒）
+        """
         if self.playing:
             raise RuntimeError("已在回放中")
 
@@ -30,7 +37,11 @@ class Player:
 
         self.playing = True
         self.progress = 0.0
-        self._task = asyncio.ensure_future(self._play_loop(frames, speed))
+        self.current_loop = 0
+        self.total_loops = repeat
+        self._task = asyncio.ensure_future(
+            self._play_loop(frames, speed, repeat, interval_sec)
+        )
 
     async def stop(self):
         if not self.playing:
@@ -43,30 +54,44 @@ class Player:
             except asyncio.CancelledError:
                 pass
 
-    async def _play_loop(self, frames: list[dict], speed: float):
+    async def _play_loop(self, frames: list[dict], speed: float,
+                         repeat: int, interval_sec: float):
         try:
             total = len(frames)
-            for i, frame in enumerate(frames):
-                if not self.playing:
+            loop_count = 0
+
+            while True:
+                loop_count += 1
+                self.current_loop = loop_count
+
+                for i, frame in enumerate(frames):
+                    if not self.playing:
+                        return
+
+                    snapshot = BodySnapshot(
+                        left_arm=frame["left_arm"],
+                        right_arm=frame["right_arm"],
+                        left_hand=frame["left_hand"],
+                        right_hand=frame["right_hand"],
+                    )
+                    self.bridge.send_frame(snapshot)
+
+                    self.progress = (i + 1) / total
+                    if self.on_progress:
+                        self.on_progress(self.progress)
+
+                    if i < total - 1:
+                        dt = (frames[i + 1]["timestamp_ms"] - frame["timestamp_ms"]) / 1000.0
+                        await asyncio.sleep(max(0.01, dt / speed))
+
+                # repeat=0 无限循环，否则到达次数后停止
+                if repeat != 0 and loop_count >= repeat:
                     break
 
-                snapshot = BodySnapshot(
-                    left_arm=frame["left_arm"],
-                    right_arm=frame["right_arm"],
-                    left_hand=frame["left_hand"],
-                    right_hand=frame["right_hand"],
-                )
-                self.bridge.send_frame(snapshot)
+                # 循环间隔等待
+                if interval_sec > 0 and self.playing:
+                    await asyncio.sleep(interval_sec)
 
-                self.progress = (i + 1) / total
-                if self.on_progress:
-                    self.on_progress(self.progress)
-
-                if i < total - 1:
-                    dt = (frames[i + 1]["timestamp_ms"] - frame["timestamp_ms"]) / 1000.0
-                    await asyncio.sleep(max(0.01, dt / speed))
-
-            self.playing = False
             self.progress = 1.0
             if self.on_progress:
                 self.on_progress(1.0)

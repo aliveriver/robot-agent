@@ -89,6 +89,8 @@ async def status_broadcast_loop():
                     "type": "play_status",
                     "playing": True,
                     "progress": round(player.progress, 3),
+                    "current_loop": player.current_loop,
+                    "total_loops": player.total_loops,
                 })
                 await _broadcast(play_msg)
             elif was_playing:
@@ -263,8 +265,10 @@ async def handle_ws_action(action: str, msg: dict) -> dict:
     elif action == "play":
         tid = int(msg.get("trajectory_id", 0))
         speed = float(msg.get("speed", 1.0))
+        repeat = int(msg.get("repeat", 1))
+        interval_sec = float(msg.get("interval_sec", 0.0))
         try:
-            await player.play(tid, speed)
+            await player.play(tid, speed, repeat, interval_sec)
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
