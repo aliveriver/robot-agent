@@ -180,6 +180,15 @@ class RosBridge:
                 self._hand_pos["right"] = list(msg.position[:6])
 
     def _ctrl_cb(self):
+        # 手部始终下发（不依赖手臂模式）
+        if self._hands_initialized:
+            for side, pub in [("left", self._lhand_pub), ("right", self._rhand_pub)]:
+                h_msg = JointState()
+                h_msg.header.stamp = self._node.get_clock().now().to_msg()
+                h_msg.name = ["1", "2", "3", "4", "5", "6"]
+                h_msg.position = self._hand_target[side]
+                pub.publish(h_msg)
+
         if all(m == "idle" for m in self.joint_modes.values()):
             return
 
@@ -210,14 +219,6 @@ class RosBridge:
         if arm_msg.cmds:
             self._arm_pub.publish(arm_msg)
 
-        # 手部持续下发
-        for side, pub in [("left", self._lhand_pub), ("right", self._rhand_pub)]:
-            h_msg = JointState()
-            h_msg.header.stamp = self._node.get_clock().now().to_msg()
-            h_msg.name = ["1", "2", "3", "4", "5", "6"]
-            h_msg.position = self._hand_target[side]
-            pub.publish(h_msg)
-
     def get_snapshot(self) -> BodySnapshot:
         with self._lock:
             return BodySnapshot(
@@ -238,6 +239,7 @@ class RosBridge:
             with self._lock:
                 for mid in ALL_ARM_IDS:
                     self._locked_pos[mid] = self._arm_pos[mid]
+        print(f"[ROS2] set_mode: {self.mode} -> {mode}")
         self.mode = mode
         for mid in ALL_ARM_IDS:
             self.joint_modes[mid] = mode
@@ -261,6 +263,7 @@ class RosBridge:
             self.mode = active_modes.pop()
         else:
             self.mode = "mixed"
+        print(f"[ROS2] set_joint_mode: ids={motor_ids} mode={mode} -> overall={self.mode}")
 
     def set_current(self, motor_ids: list, current: float):
         for mid in motor_ids:
@@ -270,6 +273,11 @@ class RosBridge:
                 self.current_config["small_joint"] = current
 
     def set_hand(self, side: str, angles: list):
+        if not self._hands_initialized:
+            with self._lock:
+                self._hand_target["left"] = self._hand_pos["left"][:]
+                self._hand_target["right"] = self._hand_pos["right"][:]
+            self._hands_initialized = True
         ratios = [max(0.0, min(1.0, v / 100.0 if v > 1.5 else v)) for v in angles]
         if side in ("left", "both"):
             self._hand_target["left"] = ratios[:]
