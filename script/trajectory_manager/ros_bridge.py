@@ -118,7 +118,8 @@ class SimBridge:
 if _ROS2_AVAILABLE:
     class _BridgeNode(Node):
         """
-        ROS2 节点 — 结构完全对齐 control.py 的 ManipulatorControlNode。
+        ROS2 节点 — 仅负责订阅和发布，不使用 ROS2 timer。
+        控制循环由外部 Python 线程驱动。
         """
 
         def __init__(self):
@@ -141,11 +142,8 @@ if _ROS2_AVAILABLE:
             self.target_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
             self.hands_initialized = False
 
-            # 每个关节独立模式 (和 control.py 的 arm_mode 类似但更细粒度)
+            # 每个关节独立模式
             self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
-
-            # 控制循环 10Hz — 和 control.py 完全一致
-            self.create_timer(0.1, self._ctrl_cb)
 
         def _arm_cb(self, msg):
             for item in msg.status:
@@ -161,47 +159,9 @@ if _ROS2_AVAILABLE:
             if len(msg.position) >= 6:
                 self.current_hand_pos["right"] = list(msg.position[:6])
 
-        def _ctrl_cb(self):
-            """10Hz 控制回调 — 对齐 control.py 的 ctrl_cb。"""
-            # 1. 手臂
-            has_active = any(m != "idle" for m in self.joint_modes.values())
-            if has_active:
-                arm_msg = CmdSetMotorPosition()
-                arm_msg.header.stamp = self.get_clock().now().to_msg()
-                arm_msg.header.frame_id = "control_mode"
-                arm_msg.cmds = []
-
-                for mid in ALL_ARM_IDS:
-                    jmode = self.joint_modes[mid]
-                    if jmode == "idle":
-                        continue
-                    item = SetMotorPosition()
-                    item.name = mid
-                    if jmode == "limp":
-                        item.pos = self.current_arm_pos[mid]
-                        item.spd = 0.0
-                        item.cur = 0.0
-                    elif jmode == "lock":
-                        item.pos = self.locked_arm_pos[mid]
-                        item.spd = 3.14
-                        item.cur = SAFE_LOCK_CURRENT.get(mid, 2.0)
-                    arm_msg.cmds.append(item)
-
-                if arm_msg.cmds:
-                    self.arm_cmd_pub.publish(arm_msg)
-
-            # 2. 手部 — 始终高频下发（和 control.py 一致）
-            if self.hands_initialized:
-                for side, pub in [("left", self.lhand_cmd_pub), ("right", self.rhand_cmd_pub)]:
-                    h_msg = JointState()
-                    h_msg.header.stamp = self.get_clock().now().to_msg()
-                    h_msg.name = ["1", "2", "3", "4", "5", "6"]
-                    h_msg.position = self.target_hand_pos[side]
-                    pub.publish(h_msg)
-
 
 class RosBridge:
-    """对外接口，包装 _BridgeNode + spin 线程。启动方式和 control.py main() 一致。"""
+    """对外接口，包装 _BridgeNode + spin 线程 + 独立控制线程。"""
 
     def __init__(self):
         if not _ROS2_AVAILABLE:
@@ -209,12 +169,67 @@ class RosBridge:
 
         rclpy.init()
         self._node = _BridgeNode()
+        self._running = True
 
-        # 和 control.py / record.py 一样：后台线程 spin
+        # spin 线程：处理订阅回调
         self._spin_thread = threading.Thread(
             target=rclpy.spin, args=(self._node,), daemon=True
         )
         self._spin_thread.start()
+
+        # 独立控制线程：10Hz 发布命令（不依赖 ROS2 timer）
+        self._ctrl_thread = threading.Thread(
+            target=self._ctrl_loop, daemon=True
+        )
+        self._ctrl_thread.start()
+
+    def _ctrl_loop(self):
+        """独立 Python 线程，10Hz 发布控制命令。"""
+        while self._running:
+            try:
+                self._ctrl_tick()
+            except Exception as e:
+                print(f"[ROS2] ctrl_tick 异常: {e}")
+            time.sleep(0.1)
+
+    def _ctrl_tick(self):
+        n = self._node
+
+        # 1. 手臂控制
+        has_active = any(m != "idle" for m in n.joint_modes.values())
+        if has_active:
+            arm_msg = CmdSetMotorPosition()
+            arm_msg.header.stamp = n.get_clock().now().to_msg()
+            arm_msg.header.frame_id = "control_mode"
+            arm_msg.cmds = []
+
+            for mid in ALL_ARM_IDS:
+                jmode = n.joint_modes[mid]
+                if jmode == "idle":
+                    continue
+                item = SetMotorPosition()
+                item.name = mid
+                if jmode == "limp":
+                    item.pos = n.current_arm_pos[mid]
+                    item.spd = 0.0
+                    item.cur = 0.0
+                elif jmode == "lock":
+                    item.pos = n.locked_arm_pos[mid]
+                    item.spd = 3.14
+                    item.cur = SAFE_LOCK_CURRENT.get(mid, 2.0)
+                arm_msg.cmds.append(item)
+
+            if arm_msg.cmds:
+                n.arm_cmd_pub.publish(arm_msg)
+
+        # 2. 手部始终高频下发
+        if n.hands_initialized:
+            for side, pub in [("left", n.lhand_cmd_pub), ("right", n.rhand_cmd_pub)]:
+                h_msg = JointState()
+                h_msg.header.stamp = n.get_clock().now().to_msg()
+                h_msg.name = ["1", "2", "3", "4", "5", "6"]
+                h_msg.position = n.target_hand_pos[side]
+                pub.publish(h_msg)
 
     @property
     def mode(self):
@@ -322,6 +337,7 @@ class RosBridge:
             pub.publish(h_msg)
 
     def destroy(self):
+        self._running = False
         self._node.destroy_node()
         rclpy.shutdown()
 
