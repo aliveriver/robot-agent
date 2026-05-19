@@ -148,6 +148,7 @@ class RosBridge:
 
         self.mode = "idle"
         self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
+        self._locked_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
         self.current_config = {"big_joint": 3.0, "small_joint": 1.5}
         self._hands_initialized = False
 
@@ -198,7 +199,7 @@ class RosBridge:
                 item.spd = 0.0
                 item.cur = 0.0
             elif jmode == "lock":
-                item.pos = self._arm_pos[mid]
+                item.pos = self._locked_pos[mid]
                 item.spd = 10.0
                 if mid in [11, 12, 21, 22]:
                     item.cur = self.current_config["big_joint"]
@@ -233,6 +234,10 @@ class RosBridge:
                 self._hand_target["left"] = self._hand_pos["left"][:]
                 self._hand_target["right"] = self._hand_pos["right"][:]
             self._hands_initialized = True
+        if mode == "lock":
+            with self._lock:
+                for mid in ALL_ARM_IDS:
+                    self._locked_pos[mid] = self._arm_pos[mid]
         self.mode = mode
         for mid in ALL_ARM_IDS:
             self.joint_modes[mid] = mode
@@ -243,6 +248,11 @@ class RosBridge:
                 self._hand_target["left"] = self._hand_pos["left"][:]
                 self._hand_target["right"] = self._hand_pos["right"][:]
             self._hands_initialized = True
+        if mode == "lock":
+            with self._lock:
+                for mid in motor_ids:
+                    if mid in self._locked_pos:
+                        self._locked_pos[mid] = self._arm_pos[mid]
         for mid in motor_ids:
             if mid in self.joint_modes:
                 self.joint_modes[mid] = mode
