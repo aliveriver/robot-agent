@@ -187,9 +187,10 @@ class RosBridge:
         """独立 Python 线程，10Hz 发布控制命令。"""
         while self._running:
             try:
-                self._ctrl_tick()
-            except Exception as e:
-                print(f"[ROS2] ctrl_tick 异常: {e}")
+                if rclpy.ok():
+                    self._ctrl_tick()
+            except Exception:
+                pass
             time.sleep(0.1)
 
     def _ctrl_tick(self):
@@ -338,8 +339,15 @@ class RosBridge:
 
     def destroy(self):
         self._running = False
-        self._node.destroy_node()
-        rclpy.shutdown()
+        try:
+            self._node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
 
 def create_bridge():

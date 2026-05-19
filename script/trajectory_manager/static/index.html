@@ -94,8 +94,16 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
 <!-- 灵巧手控制 -->
 <div class="panel">
     <h2>左手控制</h2>
+    <div style="margin-bottom:6px;display:flex;gap:6px;">
+        <button onclick="handPreset('left','open')">张开</button>
+        <button onclick="handPreset('left','close')">握紧</button>
+    </div>
     <div id="leftHandSliders"></div>
     <h2 style="margin-top:10px">右手控制</h2>
+    <div style="margin-bottom:6px;display:flex;gap:6px;">
+        <button onclick="handPreset('right','open')">张开</button>
+        <button onclick="handPreset('right','close')">握紧</button>
+    </div>
     <div id="rightHandSliders"></div>
 </div>
 
@@ -335,6 +343,15 @@ function sendHand(side) {
         angles.push(v);
     }
     send('set_hand', { side, angles });
+}
+
+function handPreset(side, preset) {
+    const val = preset === 'open' ? 100 : 0;
+    for (let i = 0; i < 6; i++) {
+        document.getElementById(`${side}F${i}`).value = val;
+        document.getElementById(`${side}F${i}N`).value = val;
+    }
+    send('set_hand', { side, angles: [val, val, val, val, val, val] });
 }
 
 // ── 录制 ──
