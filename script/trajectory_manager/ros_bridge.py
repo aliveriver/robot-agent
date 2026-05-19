@@ -1,16 +1,14 @@
 """
 ros_bridge.py - ROS2 通信层
 
-封装与机器人硬件的所有 ROS2 交互。
-无 ROS2 环境时自动进入模拟模式（生成随机数据）。
+基于 control.py 和 record.py 的工作模式实现。
+无 ROS2 环境时自动进入模拟模式。
 """
 
 import math
 import time
-import random
 import threading
 from dataclasses import dataclass, field
-from typing import Optional
 
 # ROS2 导入（容错）
 _ROS2_AVAILABLE = False
@@ -20,13 +18,9 @@ try:
     import os as _os
     import sys as _sys
     _ROS2_WS = _os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
-    _injected = []
     for _p in _glob.glob(f"{_ROS2_WS}/install/*/local/lib/python*/dist-packages"):
         if _p not in _sys.path:
             _sys.path.insert(0, _p)
-            _injected.append(_p)
-    if _injected:
-        print(f"[ROS2] 注入路径: {len(_injected)} 个 ({_ROS2_WS})")
 
     import rclpy
     from rclpy.node import Node
@@ -45,6 +39,12 @@ ALL_ARM_IDS = LEFT_ARM_IDS + RIGHT_ARM_IDS
 JOINT_LABELS = [
     "肩俯仰", "肩侧摆", "肩旋转", "肘弯曲", "腕旋转", "腕俯仰", "腕偏转"
 ]
+
+# 来自 control.py — 每个关节的安全锁紧电流上限
+SAFE_LOCK_CURRENT = {
+    11: 6.0, 12: 5.0, 13: 4.0, 14: 4.0, 15: 2.0, 16: 2.0, 17: 2.0,
+    21: 6.0, 22: 5.0, 23: 4.0, 24: 4.0, 25: 2.0, 26: 2.0, 27: 2.0,
+}
 
 
 @dataclass
@@ -66,15 +66,12 @@ class BodySnapshot:
 
 
 class SimBridge:
-    """模拟模式：无 ROS2 时提供假数据用于开发调试。"""
+    """模拟模式。"""
 
     def __init__(self):
         self.mode = "idle"
         self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
-        self.current_config = {
-            "big_joint": 3.0,
-            "small_joint": 1.5,
-        }
+        self.current_config = {"big_joint": 2.0, "small_joint": 2.0}
         self._hand_target = {"left": [1.0] * 6, "right": [1.0] * 6}
         self._t0 = time.time()
 
@@ -97,11 +94,8 @@ class SimBridge:
         for mid in motor_ids:
             if mid in self.joint_modes:
                 self.joint_modes[mid] = mode
-        active_modes = set(self.joint_modes.values())
-        if len(active_modes) == 1:
-            self.mode = active_modes.pop()
-        else:
-            self.mode = "mixed"
+        active = set(self.joint_modes.values())
+        self.mode = active.pop() if len(active) == 1 else "mixed"
 
     def set_current(self, motor_ids: list, current: float):
         pass
@@ -112,197 +106,190 @@ class SimBridge:
         if side in ("right", "both"):
             self._hand_target["right"] = angles[:]
 
-    def send_frame(self, snapshot: BodySnapshot, speed: float = 10.0, current: float = 1.5):
+    def send_frame(self, snapshot: BodySnapshot, speed: float = 3.14, current: float = 2.0):
         pass
 
     def destroy(self):
         pass
 
 
+# ── ROS2 真实实现 ──────────────────────────────────────────────
+
+if _ROS2_AVAILABLE:
+    class _BridgeNode(Node):
+        """
+        ROS2 节点 — 结构完全对齐 control.py 的 ManipulatorControlNode。
+        """
+
+        def __init__(self):
+            super().__init__("trajectory_manager_node")
+
+            # 订阅状态
+            self.create_subscription(MotorStatusMsg, "/arm/status", self._arm_cb, 10)
+            self.create_subscription(JointState, "/inspire_hand/state/left_hand", self._lhand_cb, 10)
+            self.create_subscription(JointState, "/inspire_hand/state/right_hand", self._rhand_cb, 10)
+
+            # 发布命令
+            self.arm_cmd_pub = self.create_publisher(CmdSetMotorPosition, "/arm/cmd_pos", 10)
+            self.lhand_cmd_pub = self.create_publisher(JointState, "/inspire_hand/ctrl/left_hand", 10)
+            self.rhand_cmd_pub = self.create_publisher(JointState, "/inspire_hand/ctrl/right_hand", 10)
+
+            # 状态
+            self.current_arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
+            self.current_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
+            self.locked_arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
+            self.target_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
+            self.hands_initialized = False
+
+            # 每个关节独立模式 (和 control.py 的 arm_mode 类似但更细粒度)
+            self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
+
+            # 控制循环 10Hz — 和 control.py 完全一致
+            self.create_timer(0.1, self._ctrl_cb)
+
+        def _arm_cb(self, msg):
+            for item in msg.status:
+                mid = int(item.name)
+                if mid in self.current_arm_pos:
+                    self.current_arm_pos[mid] = float(item.pos)
+
+        def _lhand_cb(self, msg):
+            if len(msg.position) >= 6:
+                self.current_hand_pos["left"] = list(msg.position[:6])
+
+        def _rhand_cb(self, msg):
+            if len(msg.position) >= 6:
+                self.current_hand_pos["right"] = list(msg.position[:6])
+
+        def _ctrl_cb(self):
+            """10Hz 控制回调 — 对齐 control.py 的 ctrl_cb。"""
+            # 1. 手臂
+            has_active = any(m != "idle" for m in self.joint_modes.values())
+            if has_active:
+                arm_msg = CmdSetMotorPosition()
+                arm_msg.header.stamp = self.get_clock().now().to_msg()
+                arm_msg.header.frame_id = "control_mode"
+                arm_msg.cmds = []
+
+                for mid in ALL_ARM_IDS:
+                    jmode = self.joint_modes[mid]
+                    if jmode == "idle":
+                        continue
+                    item = SetMotorPosition()
+                    item.name = mid
+                    if jmode == "limp":
+                        item.pos = self.current_arm_pos[mid]
+                        item.spd = 0.0
+                        item.cur = 0.0
+                    elif jmode == "lock":
+                        item.pos = self.locked_arm_pos[mid]
+                        item.spd = 3.14
+                        item.cur = SAFE_LOCK_CURRENT.get(mid, 2.0)
+                    arm_msg.cmds.append(item)
+
+                if arm_msg.cmds:
+                    self.arm_cmd_pub.publish(arm_msg)
+
+            # 2. 手部 — 始终高频下发（和 control.py 一致）
+            if self.hands_initialized:
+                for side, pub in [("left", self.lhand_cmd_pub), ("right", self.rhand_cmd_pub)]:
+                    h_msg = JointState()
+                    h_msg.header.stamp = self.get_clock().now().to_msg()
+                    h_msg.name = ["1", "2", "3", "4", "5", "6"]
+                    h_msg.position = self.target_hand_pos[side]
+                    pub.publish(h_msg)
+
+
 class RosBridge:
-    """真实 ROS2 通信桥接。"""
+    """对外接口，包装 _BridgeNode + spin 线程。启动方式和 control.py main() 一致。"""
 
     def __init__(self):
         if not _ROS2_AVAILABLE:
             raise RuntimeError("ROS2 不可用")
 
-        if not rclpy.ok():
-            rclpy.init()
+        rclpy.init()
+        self._node = _BridgeNode()
 
-        self._node = Node("trajectory_manager_node")
-        self._lock = threading.Lock()
-
-        # 状态订阅
-        self._arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
-        self._hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
-        self._hand_target = {"left": [1.0] * 6, "right": [1.0] * 6}
-        self._arm_data_received = False
-
-        self._node.create_subscription(MotorStatusMsg, "/arm/status", self._arm_cb, 10)
-        self._node.create_subscription(JointState, "/inspire_hand/state/left_hand", self._lhand_cb, 10)
-        self._node.create_subscription(JointState, "/inspire_hand/state/right_hand", self._rhand_cb, 10)
-
-        # 命令发布
-        self._arm_pub = self._node.create_publisher(CmdSetMotorPosition, "/arm/cmd_pos", 10)
-        self._lhand_pub = self._node.create_publisher(JointState, "/inspire_hand/ctrl/left_hand", 10)
-        self._rhand_pub = self._node.create_publisher(JointState, "/inspire_hand/ctrl/right_hand", 10)
-
-        self.mode = "idle"
-        self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
-        self._locked_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
-        self.current_config = {"big_joint": 3.0, "small_joint": 1.5}
-        self._hands_initialized = False
-        self._running = True
-
-        # 后台 spin 线程（处理订阅回调）
-        self._spin_thread = threading.Thread(target=self._spin, daemon=True)
+        # 和 control.py / record.py 一样：后台线程 spin
+        self._spin_thread = threading.Thread(
+            target=rclpy.spin, args=(self._node,), daemon=True
+        )
         self._spin_thread.start()
 
-        # 独立的控制循环线程（不依赖 ROS2 timer）
-        self._ctrl_thread = threading.Thread(target=self._ctrl_loop, daemon=True)
-        self._ctrl_thread.start()
+    @property
+    def mode(self):
+        active = set(self._node.joint_modes.values())
+        return active.pop() if len(active) == 1 else "mixed"
 
-    def _spin(self):
-        try:
-            rclpy.spin(self._node)
-        except Exception as e:
-            print(f"[ROS2] spin 异常: {e}")
+    @property
+    def joint_modes(self):
+        return self._node.joint_modes
 
-    def _ctrl_loop(self):
-        """独立线程 10Hz 控制循环，直接调用 publisher。"""
-        while self._running:
-            try:
-                self._ctrl_tick()
-            except Exception as e:
-                print(f"[ROS2] ctrl_tick 异常: {e}")
-            time.sleep(0.1)
-
-    def _ctrl_tick(self):
-        # 手部始终下发
-        if self._hands_initialized:
-            for side, pub in [("left", self._lhand_pub), ("right", self._rhand_pub)]:
-                h_msg = JointState()
-                h_msg.header.stamp = self._node.get_clock().now().to_msg()
-                h_msg.name = ["1", "2", "3", "4", "5", "6"]
-                h_msg.position = self._hand_target[side]
-                pub.publish(h_msg)
-
-        if all(m == "idle" for m in self.joint_modes.values()):
-            return
-
-        arm_msg = CmdSetMotorPosition()
-        arm_msg.header.stamp = self._node.get_clock().now().to_msg()
-        arm_msg.header.frame_id = "trajectory_manager"
-        arm_msg.cmds = []
-
-        for mid in ALL_ARM_IDS:
-            jmode = self.joint_modes[mid]
-            if jmode == "idle":
-                continue
-            item = SetMotorPosition()
-            item.name = mid
-            if jmode == "limp":
-                item.pos = self._arm_pos[mid]
-                item.spd = 0.0
-                item.cur = 0.0
-            elif jmode == "lock":
-                item.pos = self._locked_pos[mid]
-                item.spd = 10.0
-                if mid in [11, 12, 21, 22]:
-                    item.cur = self.current_config["big_joint"]
-                else:
-                    item.cur = self.current_config["small_joint"]
-            arm_msg.cmds.append(item)
-
-        if arm_msg.cmds:
-            self._arm_pub.publish(arm_msg)
-
-    def _arm_cb(self, msg):
-        with self._lock:
-            for item in msg.status:
-                mid = int(item.name)
-                if mid in ALL_ARM_IDS:
-                    self._arm_pos[mid] = float(item.pos)
-
-    def _lhand_cb(self, msg):
-        if len(msg.position) >= 6:
-            with self._lock:
-                self._hand_pos["left"] = list(msg.position[:6])
-
-    def _rhand_cb(self, msg):
-        if len(msg.position) >= 6:
-            with self._lock:
-                self._hand_pos["right"] = list(msg.position[:6])
+    @property
+    def current_config(self):
+        return {"big_joint": 6.0, "small_joint": 2.0}
 
     def get_snapshot(self) -> BodySnapshot:
-        with self._lock:
-            return BodySnapshot(
-                left_arm=[self._arm_pos[mid] for mid in LEFT_ARM_IDS],
-                right_arm=[self._arm_pos[mid] for mid in RIGHT_ARM_IDS],
-                left_hand=self._hand_pos["left"][:],
-                right_hand=self._hand_pos["right"][:],
-                timestamp=time.time(),
-            )
+        n = self._node
+        return BodySnapshot(
+            left_arm=[n.current_arm_pos[mid] for mid in LEFT_ARM_IDS],
+            right_arm=[n.current_arm_pos[mid] for mid in RIGHT_ARM_IDS],
+            left_hand=n.current_hand_pos["left"][:],
+            right_hand=n.current_hand_pos["right"][:],
+            timestamp=time.time(),
+        )
 
     def set_mode(self, mode: str):
-        if mode == "limp" and not self._hands_initialized:
-            with self._lock:
-                self._hand_target["left"] = self._hand_pos["left"][:]
-                self._hand_target["right"] = self._hand_pos["right"][:]
-            self._hands_initialized = True
+        n = self._node
+        if mode == "limp" and not n.hands_initialized:
+            n.target_hand_pos["left"] = n.current_hand_pos["left"][:]
+            n.target_hand_pos["right"] = n.current_hand_pos["right"][:]
+            n.hands_initialized = True
         if mode == "lock":
-            with self._lock:
-                for mid in ALL_ARM_IDS:
-                    self._locked_pos[mid] = self._arm_pos[mid]
-        print(f"[ROS2] set_mode: {self.mode} -> {mode}")
-        self.mode = mode
+            for mid in ALL_ARM_IDS:
+                n.locked_arm_pos[mid] = n.current_arm_pos[mid]
+        print(f"[ROS2] set_mode -> {mode}")
         for mid in ALL_ARM_IDS:
-            self.joint_modes[mid] = mode
+            n.joint_modes[mid] = mode
 
     def set_joint_mode(self, motor_ids: list, mode: str):
-        if mode == "limp" and not self._hands_initialized:
-            with self._lock:
-                self._hand_target["left"] = self._hand_pos["left"][:]
-                self._hand_target["right"] = self._hand_pos["right"][:]
-            self._hands_initialized = True
+        n = self._node
+        if mode == "limp" and not n.hands_initialized:
+            n.target_hand_pos["left"] = n.current_hand_pos["left"][:]
+            n.target_hand_pos["right"] = n.current_hand_pos["right"][:]
+            n.hands_initialized = True
         if mode == "lock":
-            with self._lock:
-                for mid in motor_ids:
-                    if mid in self._locked_pos:
-                        self._locked_pos[mid] = self._arm_pos[mid]
+            for mid in motor_ids:
+                if mid in n.locked_arm_pos:
+                    n.locked_arm_pos[mid] = n.current_arm_pos[mid]
         for mid in motor_ids:
-            if mid in self.joint_modes:
-                self.joint_modes[mid] = mode
-        active_modes = set(self.joint_modes.values())
-        if len(active_modes) == 1:
-            self.mode = active_modes.pop()
-        else:
-            self.mode = "mixed"
-        print(f"[ROS2] set_joint_mode: ids={motor_ids} mode={mode} -> overall={self.mode}")
+            if mid in n.joint_modes:
+                n.joint_modes[mid] = mode
+        print(f"[ROS2] set_joint_mode: ids={motor_ids} mode={mode}")
 
     def set_current(self, motor_ids: list, current: float):
+        # 动态修改 SAFE_LOCK_CURRENT
         for mid in motor_ids:
-            if mid in [11, 12, 21, 22]:
-                self.current_config["big_joint"] = current
-            else:
-                self.current_config["small_joint"] = current
+            SAFE_LOCK_CURRENT[mid] = current
+        print(f"[ROS2] set_current: ids={motor_ids} cur={current}A")
 
     def set_hand(self, side: str, angles: list):
-        if not self._hands_initialized:
-            with self._lock:
-                self._hand_target["left"] = self._hand_pos["left"][:]
-                self._hand_target["right"] = self._hand_pos["right"][:]
-            self._hands_initialized = True
+        n = self._node
+        if not n.hands_initialized:
+            n.target_hand_pos["left"] = n.current_hand_pos["left"][:]
+            n.target_hand_pos["right"] = n.current_hand_pos["right"][:]
+            n.hands_initialized = True
         ratios = [max(0.0, min(1.0, v / 100.0 if v > 1.5 else v)) for v in angles]
         if side in ("left", "both"):
-            self._hand_target["left"] = ratios[:]
+            n.target_hand_pos["left"] = ratios[:]
         if side in ("right", "both"):
-            self._hand_target["right"] = ratios[:]
+            n.target_hand_pos["right"] = ratios[:]
 
-    def send_frame(self, snapshot: BodySnapshot, speed: float = 10.0, current: float = 1.5):
+    def send_frame(self, snapshot: BodySnapshot, speed: float = 3.14, current: float = 2.0):
         """回放时逐帧发送位置指令。"""
+        n = self._node
         arm_msg = CmdSetMotorPosition()
-        arm_msg.header.stamp = self._node.get_clock().now().to_msg()
+        arm_msg.header.stamp = n.get_clock().now().to_msg()
         arm_msg.header.frame_id = "trajectory_playback"
         arm_msg.cmds = []
 
@@ -311,7 +298,7 @@ class RosBridge:
             item.name = mid
             item.pos = snapshot.left_arm[i]
             item.spd = speed
-            item.cur = current if mid not in [11, 12] else self.current_config["big_joint"]
+            item.cur = SAFE_LOCK_CURRENT.get(mid, current)
             arm_msg.cmds.append(item)
 
         for i, mid in enumerate(RIGHT_ARM_IDS):
@@ -319,24 +306,24 @@ class RosBridge:
             item.name = mid
             item.pos = snapshot.right_arm[i]
             item.spd = speed
-            item.cur = current if mid not in [21, 22] else self.current_config["big_joint"]
+            item.cur = SAFE_LOCK_CURRENT.get(mid, current)
             arm_msg.cmds.append(item)
 
-        self._arm_pub.publish(arm_msg)
+        n.arm_cmd_pub.publish(arm_msg)
 
         for side, pub, hand_data in [
-            ("left", self._lhand_pub, snapshot.left_hand),
-            ("right", self._rhand_pub, snapshot.right_hand),
+            ("left", n.lhand_cmd_pub, snapshot.left_hand),
+            ("right", n.rhand_cmd_pub, snapshot.right_hand),
         ]:
             h_msg = JointState()
-            h_msg.header.stamp = self._node.get_clock().now().to_msg()
+            h_msg.header.stamp = n.get_clock().now().to_msg()
             h_msg.name = ["1", "2", "3", "4", "5", "6"]
             h_msg.position = hand_data
             pub.publish(h_msg)
 
     def destroy(self):
-        self._running = False
         self._node.destroy_node()
+        rclpy.shutdown()
 
 
 def create_bridge():
