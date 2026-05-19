@@ -136,6 +136,7 @@ class RosBridge:
         self._arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
         self._hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
         self._hand_target = {"left": [1.0] * 6, "right": [1.0] * 6}
+        self._arm_data_received = False
 
         self._node.create_subscription(MotorStatusMsg, "/arm/status", self._arm_cb, 10)
         self._node.create_subscription(JointState, "/inspire_hand/state/left_hand", self._lhand_cb, 10)
@@ -151,36 +152,33 @@ class RosBridge:
         self._locked_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
         self.current_config = {"big_joint": 3.0, "small_joint": 1.5}
         self._hands_initialized = False
+        self._running = True
 
-        # 控制循环 10Hz
-        self._ctrl_timer = self._node.create_timer(0.1, self._ctrl_cb)
-
-        # 后台 spin
+        # 后台 spin 线程（处理订阅回调）
         self._spin_thread = threading.Thread(target=self._spin, daemon=True)
         self._spin_thread.start()
 
+        # 独立的控制循环线程（不依赖 ROS2 timer）
+        self._ctrl_thread = threading.Thread(target=self._ctrl_loop, daemon=True)
+        self._ctrl_thread.start()
+
     def _spin(self):
-        rclpy.spin(self._node)
+        try:
+            rclpy.spin(self._node)
+        except Exception as e:
+            print(f"[ROS2] spin 异常: {e}")
 
-    def _arm_cb(self, msg):
-        with self._lock:
-            for item in msg.status:
-                mid = int(item.name)
-                if mid in ALL_ARM_IDS:
-                    self._arm_pos[mid] = float(item.pos)
+    def _ctrl_loop(self):
+        """独立线程 10Hz 控制循环，直接调用 publisher。"""
+        while self._running:
+            try:
+                self._ctrl_tick()
+            except Exception as e:
+                print(f"[ROS2] ctrl_tick 异常: {e}")
+            time.sleep(0.1)
 
-    def _lhand_cb(self, msg):
-        if len(msg.position) >= 6:
-            with self._lock:
-                self._hand_pos["left"] = list(msg.position[:6])
-
-    def _rhand_cb(self, msg):
-        if len(msg.position) >= 6:
-            with self._lock:
-                self._hand_pos["right"] = list(msg.position[:6])
-
-    def _ctrl_cb(self):
-        # 手部始终下发（不依赖手臂模式）
+    def _ctrl_tick(self):
+        # 手部始终下发
         if self._hands_initialized:
             for side, pub in [("left", self._lhand_pub), ("right", self._rhand_pub)]:
                 h_msg = JointState()
@@ -218,6 +216,23 @@ class RosBridge:
 
         if arm_msg.cmds:
             self._arm_pub.publish(arm_msg)
+
+    def _arm_cb(self, msg):
+        with self._lock:
+            for item in msg.status:
+                mid = int(item.name)
+                if mid in ALL_ARM_IDS:
+                    self._arm_pos[mid] = float(item.pos)
+
+    def _lhand_cb(self, msg):
+        if len(msg.position) >= 6:
+            with self._lock:
+                self._hand_pos["left"] = list(msg.position[:6])
+
+    def _rhand_cb(self, msg):
+        if len(msg.position) >= 6:
+            with self._lock:
+                self._hand_pos["right"] = list(msg.position[:6])
 
     def get_snapshot(self) -> BodySnapshot:
         with self._lock:
@@ -320,6 +335,7 @@ class RosBridge:
             pub.publish(h_msg)
 
     def destroy(self):
+        self._running = False
         self._node.destroy_node()
 
 
