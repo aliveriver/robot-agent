@@ -16,3 +16,4 @@ emotion_models/
 rknn_wheels/
 sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
 voice_print/
+script/path/*.json
