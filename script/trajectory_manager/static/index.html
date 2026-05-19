@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>轨迹管理器 - 天轶 2.0 Pro</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a2e; color: #eee; padding: 16px; }
+h1 { text-align: center; margin-bottom: 16px; color: #00d4ff; font-size: 1.4em; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; max-width: 1400px; margin: 0 auto; }
+.panel { background: #16213e; border-radius: 8px; padding: 14px; border: 1px solid #0f3460; }
+.panel h2 { font-size: 0.95em; color: #00d4ff; margin-bottom: 10px; border-bottom: 1px solid #0f3460; padding-bottom: 6px; }
+.conn-status { text-align: center; margin-bottom: 12px; font-size: 0.85em; }
+.conn-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+.conn-dot.on { background: #00ff88; }
+.conn-dot.off { background: #ff4444; }
+button { background: #0f3460; color: #eee; border: 1px solid #00d4ff; border-radius: 4px; padding: 6px 14px; cursor: pointer; font-size: 0.85em; transition: all 0.2s; }
+button:hover { background: #00d4ff; color: #1a1a2e; }
+button.active { background: #00d4ff; color: #1a1a2e; font-weight: bold; }
+button.danger { border-color: #ff4444; }
+button.danger:hover { background: #ff4444; }
+button.record { border-color: #ff6b6b; }
+button.record.active { background: #ff6b6b; animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+input, select { background: #0a1628; border: 1px solid #0f3460; color: #eee; border-radius: 4px; padding: 5px 8px; font-size: 0.85em; }
+input:focus, select:focus { outline: none; border-color: #00d4ff; }
+.joint-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 0.8em; font-family: monospace; }
+.joint-item { display: flex; justify-content: space-between; padding: 2px 6px; background: #0a1628; border-radius: 3px; }
+.joint-label { color: #888; }
+.joint-val { color: #00ff88; }
+.slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.slider-row label { width: 60px; font-size: 0.8em; color: #888; }
+.slider-row input[type=range] { flex: 1; accent-color: #00d4ff; }
+.slider-row .val { width: 36px; text-align: right; font-size: 0.8em; font-family: monospace; }
+.mode-btns { display: flex; gap: 8px; margin-bottom: 10px; }
+.current-group { margin-bottom: 8px; }
+.current-group label { font-size: 0.8em; color: #888; display: block; margin-bottom: 3px; }
+.traj-list { max-height: 260px; overflow-y: auto; }
+.traj-item { display: flex; align-items: center; justify-content: space-between; padding: 8px; margin-bottom: 4px; background: #0a1628; border-radius: 4px; }
+.traj-info { flex: 1; }
+.traj-name { font-weight: bold; font-size: 0.9em; }
+.traj-meta { font-size: 0.75em; color: #888; margin-top: 2px; }
+.traj-actions { display: flex; gap: 4px; }
+.traj-actions button { padding: 3px 8px; font-size: 0.75em; }
+.record-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.record-bar input { width: 160px; }
+.record-info { font-size: 0.8em; color: #ff6b6b; font-family: monospace; }
+.progress-bar { width: 100%; height: 6px; background: #0a1628; border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.progress-fill { height: 100%; background: #00d4ff; transition: width 0.1s; }
+.full-width { grid-column: 1 / -1; }
+</style>
+</head>
+<body>
+<h1>轨迹管理器 - 天轶 2.0 Pro</h1>
+<div class="conn-status"><span class="conn-dot off" id="connDot"></span><span id="connText">未连接</span></div>
+
+<div class="grid">
+<!-- 模式控制 + 电流调节 -->
+<div class="panel">
+    <h2>模式控制</h2>
+    <div class="mode-btns">
+        <button id="btnIdle" class="active" onclick="setMode('idle')">空闲</button>
+        <button id="btnLimp" onclick="setMode('limp')">松弛 (拖动示教)</button>
+        <button id="btnLock" onclick="setMode('lock')">锁定 (保持位置)</button>
+    </div>
+    <h2>电流调节</h2>
+    <div class="current-group">
+        <label>大关节电流 (肩/大臂) — <span id="bigCurVal">3.0</span>A</label>
+        <div class="slider-row">
+            <input type="range" min="0" max="6" step="0.1" value="3.0" id="bigCur" oninput="setCurrent('big','range')">
+            <input type="number" min="0" max="6" step="0.1" value="3.0" id="bigCurNum" style="width:60px" onchange="setCurrent('big','num')">
+        </div>
+    </div>
+    <div class="current-group">
+        <label>小关节电流 (肘/腕) — <span id="smallCurVal">1.5</span>A</label>
+        <div class="slider-row">
+            <input type="range" min="0" max="4" step="0.1" value="1.5" id="smallCur" oninput="setCurrent('small','range')">
+            <input type="number" min="0" max="4" step="0.1" value="1.5" id="smallCurNum" style="width:60px" onchange="setCurrent('small','num')">
+        </div>
+    </div>
+</div>
+
+<!-- 实时状态 -->
+<div class="panel">
+    <h2>关节状态 (实时)</h2>
+    <div class="joint-grid" id="jointGrid"></div>
+</div>
+
+<!-- 灵巧手控制 -->
+<div class="panel">
+    <h2>左手控制</h2>
+    <div id="leftHandSliders"></div>
+    <h2 style="margin-top:10px">右手控制</h2>
+    <div id="rightHandSliders"></div>
+</div>
+
+<!-- 录制控制 -->
+<div class="panel">
+    <h2>轨迹录制</h2>
+    <div class="record-bar">
+        <input type="text" id="trajName" placeholder="轨迹名称">
+        <select id="trajInterval" onchange="document.getElementById('trajIntervalNum').value=this.value">
+            <option value="50">50ms</option>
+            <option value="100" selected>100ms</option>
+            <option value="200">200ms</option>
+            <option value="500">500ms</option>
+        </select>
+        <input type="number" min="10" max="5000" step="10" value="100" id="trajIntervalNum" style="width:70px" placeholder="ms" onchange="syncIntervalSelect(this.value)">
+
+        <button id="btnRecord" class="record" onclick="toggleRecord()">开始录制</button>
+    </div>
+    <div class="record-info" id="recordInfo"></div>
+    <div class="progress-bar" id="playBar" style="display:none"><div class="progress-fill" id="playFill"></div></div>
+</div>
+
+<!-- 轨迹管理 -->
+<div class="panel full-width">
+    <h2>已保存轨迹</h2>
+    <div class="traj-list" id="trajList"><em style="color:#888">加载中...</em></div>
+</div>
+</div>
+
+<script>
+// ── 全局状态 ──
+let ws = null;
+let connected = false;
+let currentMode = 'idle';
+let recording = false;
+let playing = false;
+
+// ── WebSocket ──
+function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws`);
+    ws.onopen = () => { connected = true; updateConn(); };
+    ws.onclose = () => { connected = false; updateConn(); setTimeout(connect, 2000); };
+    ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'status') onStatus(msg.data);
+        else if (msg.type === 'record_status') onRecordStatusMsg(msg);
+        else if (msg.type === 'play_status') onPlayStatus(msg);
+        else if (msg.type === 'result') onResult(msg);
+    };
+}
+
+function send(action, params = {}) {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ action, ...params }));
+}
+
+function updateConn() {
+    document.getElementById('connDot').className = 'conn-dot ' + (connected ? 'on' : 'off');
+    document.getElementById('connText').textContent = connected ? '已连接' : '未连接';
+}
+
+// ── 状态更新 ──
+const jointLabels = ['肩俯仰','肩侧摆','肩旋转','肘弯曲','腕旋转','腕俯仰','腕偏转'];
+const fingerLabels = ['小指','无名指','中指','食指','拇指弯','拇指旋'];
+
+function onStatus(data) {
+    currentMode = data.mode || 'idle';
+    document.getElementById('btnIdle').className = currentMode === 'idle' ? 'active' : '';
+    document.getElementById('btnLimp').className = currentMode === 'limp' ? 'active' : '';
+    document.getElementById('btnLock').className = currentMode === 'lock' ? 'active' : '';
+
+    let html = '';
+    for (let i = 0; i < 7; i++) {
+        const lv = (data.left_arm[i] * 180 / Math.PI).toFixed(1);
+        const rv = (data.right_arm[i] * 180 / Math.PI).toFixed(1);
+        html += `<div class="joint-item"><span class="joint-label">左${jointLabels[i]}</span><span class="joint-val">${lv}°</span></div>`;
+        html += `<div class="joint-item"><span class="joint-label">右${jointLabels[i]}</span><span class="joint-val">${rv}°</span></div>`;
+    }
+    document.getElementById('jointGrid').innerHTML = html;
+}
+
+function resetRecordUI() {
+    recording = false;
+    document.getElementById('recordInfo').textContent = '';
+    document.getElementById('btnRecord').textContent = '开始录制';
+    document.getElementById('btnRecord').className = 'record';
+}
+
+function onPlayStatus(msg) {
+    const bar = document.getElementById('playBar');
+    const fill = document.getElementById('playFill');
+    if (msg.playing) {
+        playing = true;
+        bar.style.display = 'block';
+        fill.style.width = (msg.progress * 100) + '%';
+    } else {
+        playing = false;
+        fill.style.width = '100%';
+        setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0%'; }, 800);
+    }
+}
+
+function resetPlayUI() {
+    playing = false;
+    document.getElementById('playBar').style.display = 'none';
+    document.getElementById('playFill').style.width = '0%';
+}
+
+function onRecordStatusMsg(msg) {
+    if (msg.recording) {
+        recording = true;
+        document.getElementById('recordInfo').textContent = `录制中: ${msg.frames} 帧 | ${msg.elapsed_sec}s`;
+        document.getElementById('btnRecord').textContent = '停止录制';
+        document.getElementById('btnRecord').className = 'record active';
+    } else {
+        resetRecordUI();
+    }
+}
+
+function onResult(msg) {
+    if (msg.action === 'stop_record' && msg.ok) {
+        resetRecordUI();
+        loadTrajectories();
+    }
+    if (msg.action === 'play' && msg.ok) {
+        document.getElementById('playBar').style.display = 'block';
+        document.getElementById('playFill').style.width = '0%';
+    }
+    if (msg.action === 'stop_play') {
+        resetPlayUI();
+    }
+}
+
+// ── 模式控制 ──
+function setMode(mode) { send('set_mode', { mode }); }
+
+// ── 电流调节 ──
+function setCurrent(type, source) {
+    if (type === 'big') {
+        let v;
+        if (source === 'num') {
+            v = document.getElementById('bigCurNum').value;
+            document.getElementById('bigCur').value = v;
+        } else {
+            v = document.getElementById('bigCur').value;
+            document.getElementById('bigCurNum').value = v;
+        }
+        document.getElementById('bigCurVal').textContent = v;
+        send('set_current', { motor_ids: [11,12,21,22], current: parseFloat(v) });
+    } else {
+        let v;
+        if (source === 'num') {
+            v = document.getElementById('smallCurNum').value;
+            document.getElementById('smallCur').value = v;
+        } else {
+            v = document.getElementById('smallCur').value;
+            document.getElementById('smallCurNum').value = v;
+        }
+        document.getElementById('smallCurVal').textContent = v;
+        send('set_current', { motor_ids: [13,14,15,16,17,23,24,25,26,27], current: parseFloat(v) });
+    }
+}
+
+// ── 灵巧手 ──
+function initHandSliders() {
+    ['left', 'right'].forEach(side => {
+        const container = document.getElementById(side === 'left' ? 'leftHandSliders' : 'rightHandSliders');
+        let html = '';
+        for (let i = 0; i < 6; i++) {
+            html += `<div class="slider-row">
+                <label>${fingerLabels[i]}</label>
+                <input type="range" min="0" max="100" value="100" id="${side}F${i}" oninput="onHandSlider('${side}',${i},'range')">
+                <input type="number" min="0" max="100" step="1" value="100" id="${side}F${i}N" style="width:50px" onchange="onHandSlider('${side}',${i},'num')">
+            </div>`;
+        }
+        container.innerHTML = html;
+    });
+}
+
+function onHandSlider(side, idx, source) {
+    const rangeEl = document.getElementById(`${side}F${idx}`);
+    const numEl = document.getElementById(`${side}F${idx}N`);
+    if (source === 'num') {
+        rangeEl.value = numEl.value;
+    } else {
+        numEl.value = rangeEl.value;
+    }
+    sendHand(side);
+}
+
+function sendHand(side) {
+    const angles = [];
+    for (let i = 0; i < 6; i++) {
+        const v = parseInt(document.getElementById(`${side}F${i}`).value);
+        angles.push(v);
+    }
+    send('set_hand', { side, angles });
+}
+
+// ── 录制 ──
+function syncIntervalSelect(val) {
+    const sel = document.getElementById('trajInterval');
+    const opts = [...sel.options].map(o => o.value);
+    sel.value = opts.includes(val) ? val : '';
+}
+
+function toggleRecord() {
+    if (!recording) {
+        const name = document.getElementById('trajName').value.trim();
+        if (!name) { alert('请输入轨迹名称'); return; }
+        const selectVal = document.getElementById('trajInterval').value;
+        const numVal = document.getElementById('trajIntervalNum').value;
+        const interval_ms = parseInt(selectVal || numVal || '100');
+        if (interval_ms < 10) { alert('采样间隔不能小于10ms'); return; }
+        send('start_record', { name, interval_ms });
+    } else {
+        send('stop_record');
+    }
+}
+
+// ── 轨迹管理 ──
+async function loadTrajectories() {
+    try {
+        const res = await fetch('/api/trajectories');
+        const list = await res.json();
+        const container = document.getElementById('trajList');
+        if (!list.length) { container.innerHTML = '<em style="color:#888">暂无轨迹</em>'; return; }
+        container.innerHTML = list.map(t => `
+            <div class="traj-item">
+                <div class="traj-info">
+                    <div class="traj-name">${t.name}</div>
+                    <div class="traj-meta">${t.total_frames}帧 | ${t.duration_sec.toFixed(1)}s | 间隔${t.sample_interval_ms}ms | ${t.created_at}</div>
+                </div>
+                <div class="traj-actions">
+                    <button onclick="playTraj(${t.id})">回放</button>
+                    <button onclick="renameTraj(${t.id},'${t.name}')">重命名</button>
+                    <button class="danger" onclick="deleteTraj(${t.id})">删除</button>
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        document.getElementById('trajList').innerHTML = '<em style="color:#ff4444">加载失败</em>';
+    }
+}
+
+function playTraj(id) {
+    const speed = parseFloat(prompt('回放速度倍率 (默认1.0):', '1.0') || '1.0');
+    send('play', { trajectory_id: id, speed });
+}
+
+function renameTraj(id, oldName) {
+    const name = prompt('新名称:', oldName);
+    if (name && name !== oldName) {
+        fetch(`/api/trajectories/${id}`, {
+            method: 'PUT', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ name })
+        }).then(() => loadTrajectories());
+    }
+}
+
+function deleteTraj(id) {
+    if (!confirm('确定删除此轨迹？')) return;
+    fetch(`/api/trajectories/${id}`, { method: 'DELETE' }).then(() => loadTrajectories());
+}
+
+// ── 初始化 ──
+initHandSliders();
+connect();
+loadTrajectories();
+</script>
+</body>
+</html>
