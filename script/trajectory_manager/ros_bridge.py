@@ -13,22 +13,30 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 # ROS2 导入（容错）
+_ROS2_AVAILABLE = False
+_ROS2_IMPORT_ERROR = ""
 try:
     import glob as _glob
     import os as _os
     import sys as _sys
     _ROS2_WS = _os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
+    _injected = []
     for _p in _glob.glob(f"{_ROS2_WS}/install/*/local/lib/python*/dist-packages"):
         if _p not in _sys.path:
             _sys.path.insert(0, _p)
+            _injected.append(_p)
+    if _injected:
+        print(f"[ROS2] 注入路径: {len(_injected)} 个 ({_ROS2_WS})")
 
     import rclpy
     from rclpy.node import Node
     from bodyctrl_msgs.msg import MotorStatusMsg, CmdSetMotorPosition, SetMotorPosition
     from sensor_msgs.msg import JointState
     _ROS2_AVAILABLE = True
-except ImportError:
-    _ROS2_AVAILABLE = False
+    print("[ROS2] 所有依赖导入成功")
+except ImportError as e:
+    _ROS2_IMPORT_ERROR = str(e)
+    print(f"[ROS2] 导入失败: {e}")
 
 LEFT_ARM_IDS = [11, 12, 13, 14, 15, 16, 17]
 RIGHT_ARM_IDS = [21, 22, 23, 24, 25, 26, 27]
@@ -301,10 +309,12 @@ def create_bridge():
     """工厂函数：有 ROS2 用真实桥接，否则用模拟。"""
     if _ROS2_AVAILABLE:
         try:
-            return RosBridge()
+            bridge = RosBridge()
+            print("[ROS2] RosBridge 初始化成功，使用真实模式")
+            return bridge
         except Exception as e:
             print(f"[WARN] ROS2 初始化失败，回退到模拟模式: {e}")
             return SimBridge()
     else:
-        print("[INFO] ROS2 不可用，使用模拟模式")
+        print(f"[INFO] ROS2 不可用（{_ROS2_IMPORT_ERROR}），使用模拟模式")
         return SimBridge()

@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
 <title>轨迹管理器 - 天轶 2.0 Pro</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -169,23 +170,41 @@ function onStatus(data) {
 
     const jm = data.joint_modes || {};
     lastJointModes = jm;
-    let html = '';
+
     const sides = [
-        {prefix: '左', ids: [11,12,13,14,15,16,17], arm: data.left_arm},
-        {prefix: '右', ids: [21,22,23,24,25,26,27], arm: data.right_arm},
+        {ids: [11,12,13,14,15,16,17], arm: data.left_arm},
+        {ids: [21,22,23,24,25,26,27], arm: data.right_arm},
     ];
     for (const side of sides) {
         for (let i = 0; i < 7; i++) {
             const mid = side.ids[i];
             const val = (side.arm[i] * 180 / Math.PI).toFixed(1);
             const mode = jm[String(mid)] || jm[mid] || 'idle';
-            const limpCls = mode === 'limp' ? 'limp' : '';
-            const lockCls = mode === 'lock' ? 'lock' : '';
+
+            const valEl = document.getElementById(`jv_${mid}`);
+            const limpBtn = document.getElementById(`jl_${mid}`);
+            const lockBtn = document.getElementById(`jk_${mid}`);
+            if (valEl) valEl.textContent = val + '°';
+            if (limpBtn) limpBtn.className = 'joint-mode-btn' + (mode === 'limp' ? ' limp' : '');
+            if (lockBtn) lockBtn.className = 'joint-mode-btn' + (mode === 'lock' ? ' lock' : '');
+        }
+    }
+}
+
+function initJointGrid() {
+    const sides = [
+        {prefix: '左', ids: [11,12,13,14,15,16,17]},
+        {prefix: '右', ids: [21,22,23,24,25,26,27]},
+    ];
+    let html = '';
+    for (const side of sides) {
+        for (let i = 0; i < 7; i++) {
+            const mid = side.ids[i];
             html += `<div class="joint-item">
                 <span class="joint-label">${side.prefix}${jointLabels[i]}</span>
-                <button class="joint-mode-btn ${limpCls}" onclick="setJointMode(${mid},'limp')" title="松弛">松</button>
-                <button class="joint-mode-btn ${lockCls}" onclick="setJointMode(${mid},'lock')" title="锁定">锁</button>
-                <span class="joint-val">${val}°</span>
+                <button class="joint-mode-btn" id="jl_${mid}" onclick="setJointMode(${mid},'limp')" title="松弛">松</button>
+                <button class="joint-mode-btn" id="jk_${mid}" onclick="setJointMode(${mid},'lock')" title="锁定">锁</button>
+                <span class="joint-val" id="jv_${mid}">0.0°</span>
             </div>`;
         }
     }
@@ -385,6 +404,7 @@ function deleteTraj(id) {
 }
 
 // ── 初始化 ──
+initJointGrid();
 initHandSliders();
 connect();
 loadTrajectories();
