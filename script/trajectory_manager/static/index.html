@@ -26,9 +26,12 @@ button.record.active { background: #ff6b6b; animation: pulse 1s infinite; }
 input, select { background: #0a1628; border: 1px solid #0f3460; color: #eee; border-radius: 4px; padding: 5px 8px; font-size: 0.85em; }
 input:focus, select:focus { outline: none; border-color: #00d4ff; }
 .joint-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 0.8em; font-family: monospace; }
-.joint-item { display: flex; justify-content: space-between; padding: 2px 6px; background: #0a1628; border-radius: 3px; }
-.joint-label { color: #888; }
-.joint-val { color: #00ff88; }
+.joint-item { display: flex; align-items: center; padding: 2px 6px; background: #0a1628; border-radius: 3px; gap: 4px; }
+.joint-label { color: #888; flex-shrink: 0; }
+.joint-val { color: #00ff88; margin-left: auto; }
+.joint-mode-btn { font-size: 0.7em; padding: 1px 5px; border-radius: 3px; cursor: pointer; border: 1px solid #444; background: #1a1a2e; color: #888; margin-left: 4px; flex-shrink: 0; }
+.joint-mode-btn.limp { border-color: #ffaa00; color: #ffaa00; }
+.joint-mode-btn.lock { border-color: #00ff88; color: #00ff88; }
 .slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .slider-row label { width: 60px; font-size: 0.8em; color: #888; }
 .slider-row input[type=range] { flex: 1; accent-color: #00d4ff; }
@@ -128,6 +131,7 @@ let connected = false;
 let currentMode = 'idle';
 let recording = false;
 let playing = false;
+let lastJointModes = {};
 
 // ── WebSocket ──
 function connect() {
@@ -163,12 +167,27 @@ function onStatus(data) {
     document.getElementById('btnLimp').className = currentMode === 'limp' ? 'active' : '';
     document.getElementById('btnLock').className = currentMode === 'lock' ? 'active' : '';
 
+    const jm = data.joint_modes || {};
+    lastJointModes = jm;
     let html = '';
-    for (let i = 0; i < 7; i++) {
-        const lv = (data.left_arm[i] * 180 / Math.PI).toFixed(1);
-        const rv = (data.right_arm[i] * 180 / Math.PI).toFixed(1);
-        html += `<div class="joint-item"><span class="joint-label">左${jointLabels[i]}</span><span class="joint-val">${lv}°</span></div>`;
-        html += `<div class="joint-item"><span class="joint-label">右${jointLabels[i]}</span><span class="joint-val">${rv}°</span></div>`;
+    const sides = [
+        {prefix: '左', ids: [11,12,13,14,15,16,17], arm: data.left_arm},
+        {prefix: '右', ids: [21,22,23,24,25,26,27], arm: data.right_arm},
+    ];
+    for (const side of sides) {
+        for (let i = 0; i < 7; i++) {
+            const mid = side.ids[i];
+            const val = (side.arm[i] * 180 / Math.PI).toFixed(1);
+            const mode = jm[String(mid)] || jm[mid] || 'idle';
+            const limpCls = mode === 'limp' ? 'limp' : '';
+            const lockCls = mode === 'lock' ? 'lock' : '';
+            html += `<div class="joint-item">
+                <span class="joint-label">${side.prefix}${jointLabels[i]}</span>
+                <button class="joint-mode-btn ${limpCls}" onclick="setJointMode(${mid},'limp')" title="松弛">松</button>
+                <button class="joint-mode-btn ${lockCls}" onclick="setJointMode(${mid},'lock')" title="锁定">锁</button>
+                <span class="joint-val">${val}°</span>
+            </div>`;
+        }
     }
     document.getElementById('jointGrid').innerHTML = html;
 }
@@ -227,6 +246,14 @@ function onResult(msg) {
 
 // ── 模式控制 ──
 function setMode(mode) { send('set_mode', { mode }); }
+
+function setJointMode(mid, mode) {
+    // Toggle: if already in this mode, set to idle
+    const jm = lastJointModes || {};
+    const current = jm[String(mid)] || jm[mid] || 'idle';
+    const target = current === mode ? 'idle' : mode;
+    send('set_joint_mode', { motor_ids: [mid], mode: target });
+}
 
 // ── 电流调节 ──
 function setCurrent(type, source) {

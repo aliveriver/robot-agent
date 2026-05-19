@@ -58,6 +58,7 @@ async def status_broadcast_loop():
                 "data": {
                     **snapshot.to_dict(),
                     "mode": bridge.mode,
+                    "joint_modes": bridge.joint_modes,
                     "current_config": bridge.current_config,
                 },
             })
@@ -235,6 +236,14 @@ async def handle_ws_action(action: str, msg: dict) -> dict:
             return {"ok": False, "error": "无效模式"}
         bridge.set_mode(mode)
         return {"ok": True, "mode": mode}
+
+    elif action == "set_joint_mode":
+        motor_ids = msg.get("motor_ids", [])
+        mode = msg.get("mode", "limp")
+        if mode not in ("idle", "limp", "lock"):
+            return {"ok": False, "error": "无效模式"}
+        bridge.set_joint_mode(motor_ids, mode)
+        return {"ok": True, "joint_modes": bridge.joint_modes}
 
     elif action == "set_current":
         motor_ids = msg.get("motor_ids", ALL_ARM_IDS)

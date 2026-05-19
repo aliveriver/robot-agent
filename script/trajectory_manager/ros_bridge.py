@@ -62,6 +62,7 @@ class SimBridge:
 
     def __init__(self):
         self.mode = "idle"
+        self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
         self.current_config = {
             "big_joint": 3.0,
             "small_joint": 1.5,
@@ -81,6 +82,18 @@ class SimBridge:
 
     def set_mode(self, mode: str):
         self.mode = mode
+        for mid in ALL_ARM_IDS:
+            self.joint_modes[mid] = mode
+
+    def set_joint_mode(self, motor_ids: list, mode: str):
+        for mid in motor_ids:
+            if mid in self.joint_modes:
+                self.joint_modes[mid] = mode
+        active_modes = set(self.joint_modes.values())
+        if len(active_modes) == 1:
+            self.mode = active_modes.pop()
+        else:
+            self.mode = "mixed"
 
     def set_current(self, motor_ids: list, current: float):
         pass
@@ -126,6 +139,7 @@ class RosBridge:
         self._rhand_pub = self._node.create_publisher(JointState, "/inspire_hand/ctrl/right_hand", 10)
 
         self.mode = "idle"
+        self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
         self.current_config = {"big_joint": 3.0, "small_joint": 1.5}
         self._hands_initialized = False
 
@@ -157,7 +171,7 @@ class RosBridge:
                 self._hand_pos["right"] = list(msg.position[:6])
 
     def _ctrl_cb(self):
-        if self.mode == "idle":
+        if all(m == "idle" for m in self.joint_modes.values()):
             return
 
         arm_msg = CmdSetMotorPosition()
@@ -166,13 +180,16 @@ class RosBridge:
         arm_msg.cmds = []
 
         for mid in ALL_ARM_IDS:
+            jmode = self.joint_modes[mid]
+            if jmode == "idle":
+                continue
             item = SetMotorPosition()
             item.name = mid
-            if self.mode == "limp":
+            if jmode == "limp":
                 item.pos = self._arm_pos[mid]
                 item.spd = 0.0
                 item.cur = 0.0
-            elif self.mode == "lock":
+            elif jmode == "lock":
                 item.pos = self._arm_pos[mid]
                 item.spd = 10.0
                 if mid in [11, 12, 21, 22]:
@@ -180,7 +197,9 @@ class RosBridge:
                 else:
                     item.cur = self.current_config["small_joint"]
             arm_msg.cmds.append(item)
-        self._arm_pub.publish(arm_msg)
+
+        if arm_msg.cmds:
+            self._arm_pub.publish(arm_msg)
 
         # 手部持续下发
         for side, pub in [("left", self._lhand_pub), ("right", self._rhand_pub)]:
@@ -207,6 +226,23 @@ class RosBridge:
                 self._hand_target["right"] = self._hand_pos["right"][:]
             self._hands_initialized = True
         self.mode = mode
+        for mid in ALL_ARM_IDS:
+            self.joint_modes[mid] = mode
+
+    def set_joint_mode(self, motor_ids: list, mode: str):
+        if mode == "limp" and not self._hands_initialized:
+            with self._lock:
+                self._hand_target["left"] = self._hand_pos["left"][:]
+                self._hand_target["right"] = self._hand_pos["right"][:]
+            self._hands_initialized = True
+        for mid in motor_ids:
+            if mid in self.joint_modes:
+                self.joint_modes[mid] = mode
+        active_modes = set(self.joint_modes.values())
+        if len(active_modes) == 1:
+            self.mode = active_modes.pop()
+        else:
+            self.mode = "mixed"
 
     def set_current(self, motor_ids: list, current: float):
         for mid in motor_ids:
