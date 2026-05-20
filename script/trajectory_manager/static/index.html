@@ -83,15 +83,15 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
     <div class="current-group">
         <label>大关节电流 (肩/大臂) — <span id="bigCurVal">3.0</span>A</label>
         <div class="slider-row">
-            <input type="range" min="0" max="6" step="0.1" value="3.0" id="bigCur" oninput="setCurrent('big','range')">
-            <input type="number" min="0" max="6" step="0.1" value="3.0" id="bigCurNum" style="width:60px" onchange="setCurrent('big','num')">
+            <input type="range" min="0" max="15" step="0.1" value="3.0" id="bigCur" oninput="setCurrent('big','range')">
+            <input type="number" min="0" max="15" step="0.1" value="3.0" id="bigCurNum" style="width:60px" onchange="setCurrent('big','num')">
         </div>
     </div>
     <div class="current-group">
         <label>小关节电流 (肘/腕) — <span id="smallCurVal">1.5</span>A</label>
         <div class="slider-row">
-            <input type="range" min="0" max="4" step="0.1" value="1.5" id="smallCur" oninput="setCurrent('small','range')">
-            <input type="number" min="0" max="4" step="0.1" value="1.5" id="smallCurNum" style="width:60px" onchange="setCurrent('small','num')">
+            <input type="range" min="0" max="8" step="0.1" value="1.5" id="smallCur" oninput="setCurrent('small','range')">
+            <input type="number" min="0" max="8" step="0.1" value="1.5" id="smallCurNum" style="width:60px" onchange="setCurrent('small','num')">
         </div>
     </div>
 </div>

@@ -278,6 +278,9 @@ async def handle_ws_action(action: str, msg: dict) -> dict:
         repeat = int(msg.get("repeat", 1))
         interval_sec = float(msg.get("interval_sec", 0.0))
         try:
+            # 确保回放前机器人处于空闲状态
+            if bridge and bridge.mode != "idle":
+                bridge.set_mode("idle")
             await player.play(tid, speed, repeat, interval_sec)
             return {"ok": True}
         except Exception as e:
