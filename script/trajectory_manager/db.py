@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS trajectories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     description TEXT DEFAULT '',
+    detailed_description TEXT DEFAULT '',
     sample_interval_ms INTEGER NOT NULL,
     total_frames INTEGER NOT NULL,
     duration_sec REAL NOT NULL,
@@ -41,6 +42,10 @@ async def init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.executescript(SCHEMA)
+        cursor = await db.execute("PRAGMA table_info(trajectories)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "detailed_description" not in columns:
+            await db.execute("ALTER TABLE trajectories ADD COLUMN detailed_description TEXT DEFAULT ''")
         await db.execute("PRAGMA foreign_keys = ON")
         await db.commit()
 

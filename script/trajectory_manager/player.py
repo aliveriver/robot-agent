@@ -17,6 +17,7 @@ class Player:
         self.bridge = bridge
         self.on_progress = on_progress
         self.playing = False
+        self.paused = False
         self.progress = 0.0
         self.current_loop = 0
         self.total_loops = 1
@@ -36,6 +37,7 @@ class Player:
             raise ValueError("轨迹无帧数据")
 
         self.playing = True
+        self.paused = False
         self.progress = 0.0
         self.current_loop = 0
         self.total_loops = repeat
@@ -47,12 +49,37 @@ class Player:
         if not self.playing:
             return
         self.playing = False
+        self.paused = False
         if self._task:
             self._task.cancel()
             try:
                 await self._task
             except asyncio.CancelledError:
                 pass
+
+    async def pause(self):
+        if not self.playing:
+            raise RuntimeError("当前没有在回放")
+        self.paused = True
+
+    async def resume(self):
+        if not self.playing:
+            raise RuntimeError("当前没有在回放")
+        self.paused = False
+
+    async def _wait_if_paused(self):
+        while self.playing and self.paused:
+            await asyncio.sleep(0.05)
+
+    async def _sleep_with_pause(self, duration: float):
+        remaining = max(0.0, duration)
+        while self.playing and remaining > 0:
+            await self._wait_if_paused()
+            if not self.playing:
+                return
+            step = min(0.02, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
 
     async def _play_loop(self, frames: list[dict], speed: float,
                          repeat: int, interval_sec: float):
@@ -66,6 +93,9 @@ class Player:
 
                 prev_snapshot = None
                 for i, frame in enumerate(frames):
+                    if not self.playing:
+                        return
+                    await self._wait_if_paused()
                     if not self.playing:
                         return
 
@@ -93,7 +123,7 @@ class Player:
                         self.on_progress(self.progress)
 
                     if i < total - 1:
-                        await asyncio.sleep(actual_dt)
+                        await self._sleep_with_pause(actual_dt)
 
                 # repeat=0 无限循环，否则到达次数后停止
                 if repeat != 0 and loop_count >= repeat:
@@ -101,7 +131,7 @@ class Player:
 
                 # 循环间隔等待
                 if interval_sec > 0 and self.playing:
-                    await asyncio.sleep(interval_sec)
+                    await self._sleep_with_pause(interval_sec)
 
             self.progress = 1.0
             if self.on_progress:
@@ -110,6 +140,7 @@ class Player:
             pass
         finally:
             self.playing = False
+            self.paused = False
 
     async def _load_frames(self, trajectory_id: int) -> list[dict]:
         db = await get_db()

@@ -20,6 +20,8 @@ class Recorder:
         self.recording = False
         self.frames: list[dict] = []
         self.name: str = ""
+        self.description: str = ""
+        self.detailed_description: str = ""
         self.interval_ms: int = 100
         self._task: Optional[asyncio.Task] = None
         self._start_time: float = 0.0
@@ -30,10 +32,13 @@ class Recorder:
             return 0.0
         return time.time() - self._start_time
 
-    def start(self, name: str, interval_ms: int = 100):
+    def start(self, name: str, interval_ms: int = 100,
+              description: str = "", detailed_description: str = ""):
         if self.recording:
             raise RuntimeError("已在录制中")
         self.name = name
+        self.description = description
+        self.detailed_description = detailed_description
         self.interval_ms = interval_ms
         self.frames = []
         self.recording = True
@@ -80,9 +85,16 @@ class Recorder:
         db = await get_db()
         try:
             await db.execute(
-                """INSERT INTO trajectories (name, description, sample_interval_ms, total_frames, duration_sec)
-                   VALUES (?, '', ?, ?, ?)""",
-                (self.name, self.interval_ms, len(self.frames), duration),
+                """INSERT INTO trajectories (name, description, detailed_description, sample_interval_ms, total_frames, duration_sec)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    self.name,
+                    self.description,
+                    self.detailed_description,
+                    self.interval_ms,
+                    len(self.frames),
+                    duration,
+                ),
             )
             await db.commit()
             cursor = await db.execute("SELECT last_insert_rowid()")

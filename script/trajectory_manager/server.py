@@ -90,13 +90,14 @@ async def status_broadcast_loop():
                 play_msg = json.dumps({
                     "type": "play_status",
                     "playing": True,
+                    "paused": bool(player.paused),
                     "progress": round(player.progress, 3),
                     "current_loop": player.current_loop,
                     "total_loops": player.total_loops,
                 })
                 await _broadcast(play_msg)
             elif was_playing:
-                await _broadcast(json.dumps({"type": "play_status", "playing": False, "progress": 1.0}))
+                await _broadcast(json.dumps({"type": "play_status", "playing": False, "paused": False, "progress": 1.0}))
             was_playing = is_playing
 
         await asyncio.sleep(0.1)
@@ -117,14 +118,15 @@ async def list_trajectories():
     db = await get_db()
     try:
         cursor = await db.execute(
-            "SELECT id, name, description, sample_interval_ms, total_frames, duration_sec, created_at FROM trajectories ORDER BY created_at DESC"
+            "SELECT id, name, description, detailed_description, sample_interval_ms, total_frames, duration_sec, created_at FROM trajectories ORDER BY created_at DESC"
         )
         rows = await cursor.fetchall()
         return [
             {
                 "id": r[0], "name": r[1], "description": r[2],
-                "sample_interval_ms": r[3], "total_frames": r[4],
-                "duration_sec": r[5], "created_at": r[6],
+                "detailed_description": r[3],
+                "sample_interval_ms": r[4], "total_frames": r[5],
+                "duration_sec": r[6], "created_at": r[7],
             }
             for r in rows
         ]
@@ -136,7 +138,10 @@ async def list_trajectories():
 async def get_trajectory(tid: int):
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM trajectories WHERE id = ?", (tid,))
+        cursor = await db.execute(
+            "SELECT id, name, description, detailed_description, sample_interval_ms, total_frames, duration_sec, created_at, updated_at FROM trajectories WHERE id = ?",
+            (tid,),
+        )
         row = await cursor.fetchone()
         if not row:
             return JSONResponse({"error": "not found"}, status_code=404)
@@ -147,8 +152,9 @@ async def get_trajectory(tid: int):
         frames = await cursor2.fetchall()
         return {
             "id": row[0], "name": row[1], "description": row[2],
-            "sample_interval_ms": row[3], "total_frames": row[4],
-            "duration_sec": row[5], "created_at": row[6], "updated_at": row[7],
+            "detailed_description": row[3],
+            "sample_interval_ms": row[4], "total_frames": row[5],
+            "duration_sec": row[6], "created_at": row[7], "updated_at": row[8],
             "frames": [
                 {
                     "frame_index": f[0], "timestamp_ms": f[1],
@@ -168,10 +174,16 @@ async def update_trajectory(tid: int, body: dict):
     try:
         name = body.get("name")
         description = body.get("description")
+        detailed_description = body.get("detailed_description")
         if name:
             await db.execute("UPDATE trajectories SET name = ?, updated_at = datetime('now') WHERE id = ?", (name, tid))
         if description is not None:
             await db.execute("UPDATE trajectories SET description = ?, updated_at = datetime('now') WHERE id = ?", (description, tid))
+        if detailed_description is not None:
+            await db.execute(
+                "UPDATE trajectories SET detailed_description = ?, updated_at = datetime('now') WHERE id = ?",
+                (detailed_description, tid),
+            )
         await db.commit()
         return {"ok": True}
     finally:
@@ -194,7 +206,10 @@ async def export_trajectory(tid: int):
     """导出轨迹为 JSON 文件到 ./output 目录。"""
     db = await get_db()
     try:
-        cursor = await db.execute("SELECT * FROM trajectories WHERE id = ?", (tid,))
+        cursor = await db.execute(
+            "SELECT id, name, description, detailed_description, sample_interval_ms, total_frames, duration_sec, created_at, updated_at FROM trajectories WHERE id = ?",
+            (tid,),
+        )
         row = await cursor.fetchone()
         if not row:
             return JSONResponse({"error": "not found"}, status_code=404)
@@ -211,11 +226,12 @@ async def export_trajectory(tid: int):
                 "id": row[0],
                 "name": row[1],
                 "description": row[2],
-                "sample_interval_ms": row[3],
-                "total_frames": row[4],
-                "duration_sec": row[5],
-                "created_at": row[6],
-                "updated_at": row[7],
+                "detailed_description": row[3],
+                "sample_interval_ms": row[4],
+                "total_frames": row[5],
+                "duration_sec": row[6],
+                "created_at": row[7],
+                "updated_at": row[8],
             },
             "frames": [
                 {
@@ -322,13 +338,21 @@ async def handle_ws_action(action: str, msg: dict) -> dict:
 
     elif action == "start_record":
         name = msg.get("name", "").strip()
+        description = msg.get("description", "").strip()
+        detailed_description = msg.get("detailed_description", "").strip()
         if not name:
             return {"ok": False, "error": "轨迹名称不能为空"}
         interval_ms = int(msg.get("interval_ms", 100))
         if bridge.mode == "idle":
             bridge.set_mode("limp")
-        recorder.start(name, interval_ms)
-        return {"ok": True, "name": name, "interval_ms": interval_ms}
+        recorder.start(name, interval_ms, description, detailed_description)
+        return {
+            "ok": True,
+            "name": name,
+            "interval_ms": interval_ms,
+            "description": description,
+            "detailed_description": detailed_description,
+        }
 
     elif action == "stop_record":
         tid = await recorder.stop()
@@ -351,6 +375,20 @@ async def handle_ws_action(action: str, msg: dict) -> dict:
     elif action == "stop_play":
         await player.stop()
         return {"ok": True}
+
+    elif action == "pause_play":
+        try:
+            await player.pause()
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    elif action == "resume_play":
+        try:
+            await player.resume()
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     elif action == "body_delta":
         target = msg.get("target", "")  # "leg" or "waist"

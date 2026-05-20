@@ -49,6 +49,8 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
 .traj-actions button { padding: 3px 8px; font-size: 0.75em; }
 .record-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .record-bar input { width: 160px; }
+.record-extra { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.record-extra input, .record-extra textarea { width: 100%; }
 .record-info { font-size: 0.8em; color: #ff6b6b; font-family: monospace; }
 .progress-bar { width: 100%; height: 6px; background: #0a1628; border-radius: 3px; margin-top: 8px; overflow: hidden; }
 .progress-fill { height: 100%; background: #00d4ff; transition: width 0.1s; }
@@ -174,7 +176,12 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
         <input type="number" min="1" max="5000" step="10" value="100" id="trajIntervalNum" style="width:70px" placeholder="ms" onchange="syncIntervalSelect(this.value)">
 
         <button id="btnRecord" class="record" onclick="toggleRecord()">开始录制</button>
+        <button id="btnPausePlay" onclick="togglePausePlayback()" style="display:none">暂停回放</button>
         <button id="btnStopPlay" onclick="stopPlayback()" style="display:none">停止回放</button>
+    </div>
+    <div class="record-extra">
+        <input type="text" id="trajDesc" maxlength="120" placeholder="轨迹简介（用于工具摘要）">
+        <textarea id="trajDetailDesc" rows="3" maxlength="2000" placeholder="轨迹详细介绍（用于 Agent Tool 详细说明）"></textarea>
     </div>
     <div class="record-info" id="recordInfo"></div>
     <div class="progress-bar" id="playBar" style="display:none"><div class="progress-fill" id="playFill"></div></div>
@@ -215,6 +222,7 @@ let connected = false;
 let currentMode = 'idle';
 let recording = false;
 let playing = false;
+let playPaused = false;
 let lastJointModes = {};
 
 // ── WebSocket ──
@@ -307,18 +315,29 @@ function resetRecordUI() {
 function onPlayStatus(msg) {
     const bar = document.getElementById('playBar');
     const fill = document.getElementById('playFill');
+    const btnPause = document.getElementById('btnPausePlay');
     const btnStop = document.getElementById('btnStopPlay');
     if (msg.playing) {
         playing = true;
+        playPaused = !!msg.paused;
         bar.style.display = 'block';
+        if (btnPause) {
+            btnPause.style.display = 'inline-block';
+            btnPause.textContent = playPaused ? '继续回放' : '暂停回放';
+        }
         if (btnStop) btnStop.style.display = 'inline-block';
         fill.style.width = (msg.progress * 100) + '%';
     } else {
         playing = false;
+        playPaused = false;
         fill.style.width = '100%';
         setTimeout(() => {
             bar.style.display = 'none';
             fill.style.width = '0%';
+            if (btnPause) {
+                btnPause.style.display = 'none';
+                btnPause.textContent = '暂停回放';
+            }
             if (btnStop) btnStop.style.display = 'none';
         }, 800);
     }
@@ -326,8 +345,14 @@ function onPlayStatus(msg) {
 
 function resetPlayUI() {
     playing = false;
+    playPaused = false;
     document.getElementById('playBar').style.display = 'none';
     document.getElementById('playFill').style.width = '0%';
+    const btnPause = document.getElementById('btnPausePlay');
+    if (btnPause) {
+        btnPause.style.display = 'none';
+        btnPause.textContent = '暂停回放';
+    }
     const btnStop = document.getElementById('btnStopPlay');
     if (btnStop) btnStop.style.display = 'none';
 }
@@ -351,8 +376,23 @@ function onResult(msg) {
     if (msg.action === 'play' && msg.ok) {
         document.getElementById('playBar').style.display = 'block';
         document.getElementById('playFill').style.width = '0%';
+        const btnPause = document.getElementById('btnPausePlay');
+        if (btnPause) {
+            btnPause.style.display = 'inline-block';
+            btnPause.textContent = '暂停回放';
+        }
         const btnStop = document.getElementById('btnStopPlay');
         if (btnStop) btnStop.style.display = 'inline-block';
+    }
+    if (msg.action === 'pause_play' && msg.ok) {
+        playPaused = true;
+        const btnPause = document.getElementById('btnPausePlay');
+        if (btnPause) btnPause.textContent = '继续回放';
+    }
+    if (msg.action === 'resume_play' && msg.ok) {
+        playPaused = false;
+        const btnPause = document.getElementById('btnPausePlay');
+        if (btnPause) btnPause.textContent = '暂停回放';
     }
     if (msg.action === 'stop_play') {
         resetPlayUI();
@@ -481,11 +521,13 @@ function syncIntervalSelect(val) {
 function toggleRecord() {
     if (!recording) {
         const name = document.getElementById('trajName').value.trim();
+        const description = document.getElementById('trajDesc').value.trim();
+        const detailed_description = document.getElementById('trajDetailDesc').value.trim();
         if (!name) { alert('请输入轨迹名称'); return; }
         const selectVal = document.getElementById('trajInterval').value;
         const numVal = document.getElementById('trajIntervalNum').value;
         const interval_ms = parseInt(selectVal || numVal || '100');
-        send('start_record', { name, interval_ms });
+        send('start_record', { name, interval_ms, description, detailed_description });
     } else {
         send('stop_record');
     }
@@ -503,6 +545,7 @@ async function loadTrajectories() {
                 <div class="traj-info">
                     <div class="traj-name">${t.name}</div>
                     <div class="traj-meta">${t.total_frames}帧 | ${t.duration_sec.toFixed(1)}s | 间隔${t.sample_interval_ms}ms | ${t.created_at}</div>
+                    ${t.description ? `<div class="traj-meta">简介: ${t.description}</div>` : ''}
                 </div>
                 <div class="traj-actions">
                     <button onclick="playTraj(${t.id})">回放</button>
@@ -526,6 +569,11 @@ function playTraj(id) {
 
 function stopPlayback() {
     send('stop_play');
+}
+
+function togglePausePlayback() {
+    if (!playing) return;
+    send(playPaused ? 'resume_play' : 'pause_play');
 }
 
 function bodyPreset(preset) {
@@ -559,12 +607,6 @@ function exportTraj(id, name) {
         })
         .catch(e => alert(`导出失败：${e.message}`));
 }
-
-// ── 停止回放 ──
-function stopPlayback() { send('stop_play'); }
-
-// ── 机身预设 ──
-function bodyPreset(preset) { send('body_preset', { preset }); }
 
 // ── 3D URDF 预览 ──
 (function initUrdfViewer() {
