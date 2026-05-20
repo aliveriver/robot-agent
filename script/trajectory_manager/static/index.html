@@ -53,6 +53,17 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
 .progress-bar { width: 100%; height: 6px; background: #0a1628; border-radius: 3px; margin-top: 8px; overflow: hidden; }
 .progress-fill { height: 100%; background: #00d4ff; transition: width 0.1s; }
 .full-width { grid-column: 1 / -1; }
+.body-ctrl { font-size: 0.85em; }
+.body-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.body-row .body-label { width: 100px; color: #888; font-size: 0.8em; }
+.body-row button { padding: 3px 10px; }
+.body-cur { font-family: monospace; color: #00ff88; font-size: 0.8em; margin-left: 6px; }
+.play-opts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.play-opts label { font-size: 0.78em; color: #888; }
+.play-opts input { width: 56px; }
+#urdfCanvas { width: 100%; height: 500px; display: block; background: #0a1628; border-radius: 4px; cursor: grab; }
+#urdfCanvas:active { cursor: grabbing; }
+#urdfStatus { font-size: 0.78em; color: #888; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -107,6 +118,48 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
     <div id="rightHandSliders"></div>
 </div>
 
+<!-- 腿部/腰部控制 -->
+<div class="panel">
+    <h2>腿部控制</h2>
+    <div class="body-ctrl">
+        <div class="body-row">
+            <span class="body-label">电机52 (大腿)</span>
+            <button onclick="bodyDelta('leg',52,-0.005)">-</button>
+            <input type="number" step="0.005" id="leg52" style="width:80px" value="0" onchange="bodyPos('leg',52,this.value)">
+            <button onclick="bodyDelta('leg',52,0.005)">+</button>
+            <span class="body-cur" id="leg52cur">0.0000</span>
+        </div>
+        <div class="body-row">
+            <span class="body-label">电机51 (小腿)</span>
+            <button onclick="bodyDelta('leg',51,-0.005)">-</button>
+            <input type="number" step="0.005" id="leg51" style="width:80px" value="0" onchange="bodyPos('leg',51,this.value)">
+            <button onclick="bodyDelta('leg',51,0.005)">+</button>
+            <span class="body-cur" id="leg51cur">0.0000</span>
+        </div>
+    </div>
+    <h2 style="margin-top:10px">腰部控制</h2>
+    <div class="body-ctrl">
+        <div class="body-row">
+            <span class="body-label">电机31 (腰偏航)</span>
+            <button onclick="bodyDelta('waist',31,-0.005)">-</button>
+            <input type="number" step="0.005" id="waist31" style="width:80px" value="0" onchange="bodyPos('waist',31,this.value)">
+            <button onclick="bodyDelta('waist',31,0.005)">+</button>
+            <span class="body-cur" id="waist31cur">0.0000</span>
+        </div>
+        <div class="body-row">
+            <span class="body-label">电机32 (腰俯仰)</span>
+            <button onclick="bodyDelta('waist',32,-0.005)">-</button>
+            <input type="number" step="0.005" id="waist32" style="width:80px" value="0" onchange="bodyPos('waist',32,this.value)">
+            <button onclick="bodyDelta('waist',32,0.005)">+</button>
+            <span class="body-cur" id="waist32cur">0.0000</span>
+        </div>
+    </div>
+    <h2 style="margin-top:10px">预设姿势</h2>
+    <div style="display:flex;gap:8px;">
+        <button onclick="bodyPreset('stand')">站立姿态 (Z)</button>
+    </div>
+</div>
+
 <!-- 录制控制 -->
 <div class="panel">
     <h2>轨迹录制</h2>
@@ -121,6 +174,7 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
         <input type="number" min="10" max="5000" step="10" value="100" id="trajIntervalNum" style="width:70px" placeholder="ms" onchange="syncIntervalSelect(this.value)">
 
         <button id="btnRecord" class="record" onclick="toggleRecord()">开始录制</button>
+        <button id="btnStopPlay" onclick="stopPlayback()" style="display:none">停止回放</button>
     </div>
     <div class="record-info" id="recordInfo"></div>
     <div class="progress-bar" id="playBar" style="display:none"><div class="progress-fill" id="playFill"></div></div>
@@ -129,7 +183,28 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
 <!-- 轨迹管理 -->
 <div class="panel full-width">
     <h2>已保存轨迹</h2>
+    <div style="margin-bottom:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:0.85em;">
+        <label style="color:#888">速度倍率:</label>
+        <input type="number" id="playSpeed" min="0.1" max="5" step="0.1" value="1.0" style="width:60px">
+        <label style="color:#888">重复次数 (0=无限):</label>
+        <input type="number" id="playRepeat" min="0" max="999" step="1" value="1" style="width:60px">
+        <label style="color:#888">循环间隔(秒):</label>
+        <input type="number" id="playInterval" min="0" max="60" step="0.5" value="0" style="width:60px">
+    </div>
     <div class="traj-list" id="trajList"><em style="color:#888">加载中...</em></div>
+</div>
+
+<!-- 机器人3D模型 -->
+<div class="panel full-width" id="urdfPanel">
+    <h2>机器人模型预览 (3D)</h2>
+    <div style="position:relative;">
+        <canvas id="urdfCanvas" style="width:100%;height:500px;display:block;border-radius:4px;background:#0a1628;"></canvas>
+        <div id="urdfStatus" style="position:absolute;top:8px;left:8px;font-size:0.8em;color:#888;background:rgba(0,0,0,0.6);padding:4px 8px;border-radius:4px;">加载中...</div>
+        <div style="position:absolute;top:8px;right:8px;display:flex;gap:6px;">
+            <button onclick="resetCamera()" style="font-size:0.75em;padding:3px 8px;">重置视角</button>
+        </div>
+    </div>
+    <div style="font-size:0.75em;color:#555;margin-top:6px;">左键旋转 · 右键平移 · 滚轮缩放。关节角度实时同步。</div>
 </div>
 </div>
 
@@ -197,6 +272,9 @@ function onStatus(data) {
             if (lockBtn) lockBtn.className = 'joint-mode-btn' + (mode === 'lock' ? ' lock' : '');
         }
     }
+
+    updateBodyUI(data.body);
+    updateUrdfJoints(data.left_arm || [], data.right_arm || []);
 }
 
 function initJointGrid() {
@@ -354,6 +432,35 @@ function handPreset(side, preset) {
     send('set_hand', { side, angles: [val, val, val, val, val, val] });
 }
 
+// ── 腿部/腰部控制 ──
+function bodyDelta(target, motorId, delta) {
+    send('body_delta', { target, motor_id: motorId, delta });
+}
+
+function bodyPos(target, motorId, val) {
+    send('body_pos', { target, motor_id: motorId, pos: parseFloat(val) });
+}
+
+function updateBodyUI(body) {
+    if (!body) return;
+    if (body.leg) {
+        document.getElementById('leg51cur').textContent = body.leg['51'];
+        document.getElementById('leg52cur').textContent = body.leg['52'];
+    }
+    if (body.waist) {
+        document.getElementById('waist31cur').textContent = body.waist['31'];
+        document.getElementById('waist32cur').textContent = body.waist['32'];
+    }
+    if (body.leg_target) {
+        document.getElementById('leg51').value = body.leg_target['51'];
+        document.getElementById('leg52').value = body.leg_target['52'];
+    }
+    if (body.waist_target) {
+        document.getElementById('waist31').value = body.waist_target['31'];
+        document.getElementById('waist32').value = body.waist_target['32'];
+    }
+}
+
 // ── 录制 ──
 function syncIntervalSelect(val) {
     const sel = document.getElementById('trajInterval');
@@ -401,8 +508,18 @@ async function loadTrajectories() {
 }
 
 function playTraj(id) {
-    const speed = parseFloat(prompt('回放速度倍率 (默认1.0):', '1.0') || '1.0');
-    send('play', { trajectory_id: id, speed });
+    const speed = parseFloat(document.getElementById('playSpeed').value || '1.0');
+    const repeat = parseInt(document.getElementById('playRepeat').value || '1');
+    const interval_sec = parseFloat(document.getElementById('playInterval').value || '0');
+    send('play', { trajectory_id: id, speed, repeat, interval_sec });
+}
+
+function stopPlayback() {
+    send('stop_play');
+}
+
+function bodyPreset(preset) {
+    send('body_preset', { preset });
 }
 
 function renameTraj(id, oldName) {
@@ -418,6 +535,281 @@ function renameTraj(id, oldName) {
 function deleteTraj(id) {
     if (!confirm('确定删除此轨迹？')) return;
     fetch(`/api/trajectories/${id}`, { method: 'DELETE' }).then(() => loadTrajectories());
+}
+
+// ── 停止回放 ──
+function stopPlayback() { send('stop_play'); }
+
+// ── 机身预设 ──
+function bodyPreset(preset) { send('body_preset', { preset }); }
+
+// ── 3D URDF 预览 ──
+(function initUrdfViewer() {
+    // 动态加载 Three.js
+    const s1 = document.createElement('script');
+    s1.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+    s1.onload = () => {
+        const s2 = document.createElement('script');
+        s2.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js';
+        s2.onload = () => {
+            const s3 = document.createElement('script');
+            s3.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js';
+            s3.onload = startUrdfViewer;
+            document.head.appendChild(s3);
+        };
+        document.head.appendChild(s2);
+    };
+    document.head.appendChild(s1);
+})();
+
+let urdfScene, urdfCamera, urdfRenderer, urdfControls;
+let urdfRobotGroup;
+// URDF 关节 -> Three.js Object3D 映射
+let jointObjects = {};
+// 关节名 -> 关节定义（来自 URDF 解析）
+let parsedJoints = {};
+// 当前关节角度（rad）
+let liveJointAngles = {};
+
+// URDF 关节名 <-> 电机ID 映射
+const MOTOR_JOINT_MAP = {
+    11: 'shoulder_pitch_l_joint',
+    12: 'shoulder_roll_l_joint',
+    13: 'shoulder_yaw_l_joint',
+    14: 'elbow_pitch_l_joint',
+    15: 'elbow_yaw_l_joint',
+    16: 'wrist_pitch_l_joint',
+    17: 'wrist_yaw_l_joint',
+    21: 'shoulder_pitch_r_joint',
+    22: 'shoulder_roll_r_joint',
+    23: 'shoulder_yaw_r_joint',
+    24: 'elbow_pitch_r_joint',
+    25: 'elbow_yaw_r_joint',
+    26: 'wrist_pitch_r_joint',
+    27: 'wrist_yaw_r_joint',
+};
+
+function startUrdfViewer() {
+    const canvas = document.getElementById('urdfCanvas');
+    if (!canvas) return;
+    const statusEl = document.getElementById('urdfStatus');
+
+    const THREE = window.THREE;
+
+    // 场景
+    urdfScene = new THREE.Scene();
+    urdfScene.background = new THREE.Color(0x0a1628);
+    urdfScene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(1, 2, 3);
+    urdfScene.add(dirLight);
+    const dirLight2 = new THREE.DirectionalLight(0x8888ff, 0.3);
+    dirLight2.position.set(-2, -1, -1);
+    urdfScene.add(dirLight2);
+
+    // 网格
+    const grid = new THREE.GridHelper(2, 20, 0x1a3a5c, 0x1a3a5c);
+    urdfScene.add(grid);
+
+    // 相机
+    urdfCamera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.001, 100);
+    urdfCamera.position.set(1.5, 1.0, 1.5);
+    urdfCamera.lookAt(0, 0.5, 0);
+
+    // 渲染器
+    urdfRenderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    urdfRenderer.setPixelRatio(window.devicePixelRatio);
+    urdfRenderer.setSize(canvas.clientWidth, canvas.clientHeight);
+
+    // 轨道控制
+    urdfControls = new THREE.OrbitControls(urdfCamera, canvas);
+    urdfControls.target.set(0, 0.5, 0);
+    urdfControls.update();
+
+    // 响应容器大小变化
+    const resizeObserver = new ResizeObserver(() => {
+        const w = canvas.clientWidth, h = canvas.clientHeight;
+        urdfCamera.aspect = w / h;
+        urdfCamera.updateProjectionMatrix();
+        urdfRenderer.setSize(w, h);
+    });
+    resizeObserver.observe(canvas.parentElement);
+
+    // 渲染循环
+    function animate() {
+        requestAnimationFrame(animate);
+        urdfControls.update();
+        urdfRenderer.render(urdfScene, urdfCamera);
+    }
+    animate();
+
+    // 加载 URDF + STL
+    loadUrdfModel(statusEl);
+}
+
+function resetCamera() {
+    if (!urdfCamera || !urdfControls) return;
+    urdfCamera.position.set(1.5, 1.0, 1.5);
+    urdfControls.target.set(0, 0.5, 0);
+    urdfControls.update();
+}
+
+async function loadUrdfModel(statusEl) {
+    const THREE = window.THREE;
+    try {
+        statusEl.textContent = '加载 URDF...';
+        const resp = await fetch('/urdf/urdf/tianyi2.0_urdf_with_hands.urdf');
+        if (!resp.ok) { statusEl.textContent = 'URDF 加载失败 ' + resp.status; return; }
+        const urdfText = await resp.text();
+
+        // 解析 URDF
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(urdfText, 'text/xml');
+
+        // 收集 link -> visual mesh filename
+        const linkMeshes = {};
+        xmlDoc.querySelectorAll('link').forEach(link => {
+            const name = link.getAttribute('name');
+            const meshEl = link.querySelector('visual geometry mesh');
+            if (meshEl) {
+                let fn = meshEl.getAttribute('filename') || '';
+                // package://tianyi2_urdf/meshes/xxx.STL -> /urdf/meshes/xxx.STL
+                fn = fn.replace(/^package:\/\/tianyi2_urdf\/meshes\//, '/urdf/meshes/');
+                linkMeshes[name] = fn;
+            }
+        });
+
+        // 收集关节定义
+        parsedJoints = {};
+        xmlDoc.querySelectorAll('joint').forEach(j => {
+            const name = j.getAttribute('name');
+            const type = j.getAttribute('type');
+            const parent = j.querySelector('parent')?.getAttribute('link');
+            const child = j.querySelector('child')?.getAttribute('link');
+            const originEl = j.querySelector('origin');
+            const axisEl = j.querySelector('axis');
+            const xyz = (originEl?.getAttribute('xyz') || '0 0 0').split(' ').map(Number);
+            const rpy = (originEl?.getAttribute('rpy') || '0 0 0').split(' ').map(Number);
+            const axis = (axisEl?.getAttribute('xyz') || '0 0 1').split(' ').map(Number);
+            parsedJoints[name] = { name, type, parent, child, xyz, rpy, axis };
+        });
+
+        // 建立 link 树
+        const linkChildren = {}; // parent link -> [{joint, child link}]
+        Object.values(parsedJoints).forEach(j => {
+            if (!linkChildren[j.parent]) linkChildren[j.parent] = [];
+            linkChildren[j.parent].push(j);
+        });
+
+        // 加载所有 STL 并返回 BufferGeometry
+        const stlLoader = new THREE.STLLoader();
+        const loadStl = (url) => new Promise((res) => {
+            stlLoader.load(url, geo => res(geo), undefined, () => res(null));
+        });
+
+        // 材质
+        const robotMat = new THREE.MeshPhongMaterial({
+            color: 0xc0c0c0, specular: 0x444444, shininess: 60,
+        });
+
+        // 递归构建场景树
+        statusEl.textContent = 'STL 加载中...';
+        const linkObjects = {}; // link name -> THREE.Group
+
+        async function buildLink(linkName, parentObj) {
+            const group = new THREE.Group();
+            group.name = 'link_' + linkName;
+            parentObj.add(group);
+            linkObjects[linkName] = group;
+
+            const meshUrl = linkMeshes[linkName];
+            if (meshUrl) {
+                const geo = await loadStl(meshUrl);
+                if (geo) {
+                    geo.computeVertexNormals();
+                    const mesh = new THREE.Mesh(geo, robotMat.clone());
+                    group.add(mesh);
+                }
+            }
+
+            // 子关节
+            const children = linkChildren[linkName] || [];
+            for (const joint of children) {
+                // 创建关节 group（用于旋转）
+                const jointGroup = new THREE.Group();
+                jointGroup.name = 'joint_' + joint.name;
+
+                // 设置关节在父坐标系中的位置和初始姿态（rpy）
+                jointGroup.position.set(...joint.xyz);
+                // RPY -> Three.js Euler (顺序 XYZ)
+                jointGroup.rotation.set(joint.rpy[0], joint.rpy[1], joint.rpy[2]);
+
+                group.add(jointGroup);
+                jointObjects[joint.name] = { group: jointGroup, axis: joint.axis, type: joint.type };
+
+                await buildLink(joint.child, jointGroup);
+            }
+        }
+
+        // 找到 root link (无 parent 的 link)
+        const allChildren = new Set(Object.values(parsedJoints).map(j => j.child));
+        const allLinks = new Set(xmlDoc.querySelectorAll('link').keys ?
+            [...xmlDoc.querySelectorAll('link')].map(l => l.getAttribute('name')) : []);
+        let rootLink = 'base';
+        xmlDoc.querySelectorAll('link').forEach(l => {
+            const n = l.getAttribute('name');
+            if (!allChildren.has(n)) rootLink = n;
+        });
+
+        urdfRobotGroup = new THREE.Group();
+        urdfRobotGroup.name = 'robot';
+        // 旋转使 Z 朝上（URDF 惯例），Three.js 默认 Y 朝上
+        urdfRobotGroup.rotation.x = -Math.PI / 2;
+        // 缩放：URDF 单位是 m，Three.js 也是 m，但模型可能很大
+        urdfScene.add(urdfRobotGroup);
+
+        await buildLink(rootLink, urdfRobotGroup);
+
+        // 计算 bounding box 并自动调整相机
+        const box = new THREE.Box3().setFromObject(urdfRobotGroup);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z);
+        urdfCamera.position.set(center.x + maxDim * 1.5, center.y + maxDim * 0.8, center.z + maxDim * 1.5);
+        urdfControls.target.copy(center);
+        urdfControls.update();
+
+        statusEl.textContent = `模型就绪 | ${Object.keys(linkMeshes).length} 个连杆`;
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '加载出错: ' + e.message;
+        console.error('URDF viewer error:', e);
+    }
+}
+
+// 更新 URDF 关节角度（从 WebSocket status 调用）
+function updateUrdfJoints(leftArm, rightArm) {
+    if (!jointObjects || !Object.keys(jointObjects).length) return;
+    const THREE = window.THREE;
+    if (!THREE) return;
+
+    const motorAngles = {};
+    [11,12,13,14,15,16,17].forEach((mid, i) => motorAngles[mid] = leftArm[i]);
+    [21,22,23,24,25,26,27].forEach((mid, i) => motorAngles[mid] = rightArm[i]);
+
+    for (const [midStr, jointName] of Object.entries(MOTOR_JOINT_MAP)) {
+        const mid = parseInt(midStr);
+        const angle = motorAngles[mid];
+        if (angle === undefined) continue;
+        const jo = jointObjects[jointName];
+        if (!jo || jo.type === 'fixed') continue;
+
+        const ax = jo.axis;
+        // 应用旋转：沿关节轴旋转 angle 弧度
+        const axVec = new THREE.Vector3(...ax).normalize();
+        const q = new THREE.Quaternion().setFromAxisAngle(axVec, angle);
+        // 保留关节初始姿态，只叠加关节角
+        jo.group.quaternion.copy(q);
+    }
 }
 
 // ── 初始化 ──

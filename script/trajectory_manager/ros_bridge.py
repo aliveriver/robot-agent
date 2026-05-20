@@ -109,6 +109,23 @@ class SimBridge:
     def send_frame(self, snapshot: BodySnapshot, speed: float = 3.14, current: float = 2.0):
         pass
 
+    def set_body(self, target: str, motor_id: int, delta: float):
+        pass
+
+    def set_body_pos(self, target: str, motor_id: int, pos: float):
+        pass
+
+    def set_body_preset(self, preset: str):
+        pass
+
+    def get_body_status(self):
+        return {
+            "leg": {"51": 0.0, "52": 0.0},
+            "waist": {"31": 0.0, "32": 0.0},
+            "leg_target": {"51": 0.0, "52": 0.0},
+            "waist_target": {"31": 0.0, "32": 0.0},
+        }
+
     def destroy(self):
         pass
 
@@ -129,21 +146,30 @@ if _ROS2_AVAILABLE:
             self.create_subscription(MotorStatusMsg, "/arm/status", self._arm_cb, 10)
             self.create_subscription(JointState, "/inspire_hand/state/left_hand", self._lhand_cb, 10)
             self.create_subscription(JointState, "/inspire_hand/state/right_hand", self._rhand_cb, 10)
+            self.create_subscription(MotorStatusMsg, "/leg/status", self._leg_cb, 10)
+            self.create_subscription(MotorStatusMsg, "/waist/status", self._waist_cb, 10)
 
             # 发布命令
             self.arm_cmd_pub = self.create_publisher(CmdSetMotorPosition, "/arm/cmd_pos", 10)
             self.lhand_cmd_pub = self.create_publisher(JointState, "/inspire_hand/ctrl/left_hand", 10)
             self.rhand_cmd_pub = self.create_publisher(JointState, "/inspire_hand/ctrl/right_hand", 10)
+            self.leg_cmd_pub = self.create_publisher(CmdSetMotorPosition, "/leg/cmd_pos", 10)
+            self.waist_cmd_pub = self.create_publisher(CmdSetMotorPosition, "/waist/cmd_pos", 10)
 
-            # 状态
+            # 手臂状态
             self.current_arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
             self.current_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
             self.locked_arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
             self.target_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
             self.hands_initialized = False
-
-            # 每个关节独立模式
             self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
+
+            # 腿部/腰部状态
+            self.leg_pos = {51: 0.0, 52: 0.0}
+            self.waist_pos = {31: 0.0, 32: 0.0}
+            self.leg_target = {51: 0.0, 52: 0.0}
+            self.waist_target = {31: 0.0, 32: 0.0}
+            self.body_initialized = False
 
         def _arm_cb(self, msg):
             for item in msg.status:
@@ -158,6 +184,18 @@ if _ROS2_AVAILABLE:
         def _rhand_cb(self, msg):
             if len(msg.position) >= 6:
                 self.current_hand_pos["right"] = list(msg.position[:6])
+
+        def _leg_cb(self, msg):
+            for item in msg.status:
+                mid = int(item.name)
+                if mid in self.leg_pos:
+                    self.leg_pos[mid] = float(item.pos)
+
+        def _waist_cb(self, msg):
+            for item in msg.status:
+                mid = int(item.name)
+                if mid in self.waist_pos:
+                    self.waist_pos[mid] = float(item.pos)
 
 
 class RosBridge:
@@ -301,8 +339,104 @@ class RosBridge:
         if side in ("right", "both"):
             n.target_hand_pos["right"] = ratios[:]
 
-    def send_frame(self, snapshot: BodySnapshot, speed: float = 3.14, current: float = 2.0):
-        """回放时逐帧发送位置指令。"""
+    def set_body(self, target: str, motor_id: int, delta: float):
+        """增量调节腿部/腰部位置。"""
+        n = self._node
+        if not n.body_initialized:
+            n.leg_target[51] = n.leg_pos[51]
+            n.leg_target[52] = n.leg_pos[52]
+            n.waist_target[31] = n.waist_pos[31]
+            n.waist_target[32] = n.waist_pos[32]
+            n.body_initialized = True
+
+        if target == "leg":
+            n.leg_target[motor_id] += delta
+            self._send_leg()
+        elif target == "waist":
+            n.waist_target[motor_id] += delta
+            self._send_waist()
+
+    def set_body_pos(self, target: str, motor_id: int, pos: float):
+        """绝对位置设置腿部/腰部。"""
+        n = self._node
+        if not n.body_initialized:
+            n.leg_target[51] = n.leg_pos[51]
+            n.leg_target[52] = n.leg_pos[52]
+            n.waist_target[31] = n.waist_pos[31]
+            n.waist_target[32] = n.waist_pos[32]
+            n.body_initialized = True
+
+        if target == "leg":
+            n.leg_target[motor_id] = pos
+            self._send_leg()
+        elif target == "waist":
+            n.waist_target[motor_id] = pos
+            self._send_waist()
+
+    def _send_leg(self):
+        n = self._node
+        msg = CmdSetMotorPosition()
+        msg.header.stamp = n.get_clock().now().to_msg()
+        msg.header.frame_id = "base_link"
+        msg.cmds = []
+        for mid in [51, 52]:
+            item = SetMotorPosition()
+            item.name = mid
+            item.pos = n.leg_target[mid]
+            item.spd = 0.1
+            item.cur = 60.0
+            msg.cmds.append(item)
+        n.leg_cmd_pub.publish(msg)
+
+    def _send_waist(self):
+        n = self._node
+        msg = CmdSetMotorPosition()
+        msg.header.stamp = n.get_clock().now().to_msg()
+        msg.header.frame_id = "base_link"
+        msg.cmds = []
+        for mid in [31, 32]:
+            item = SetMotorPosition()
+            item.name = mid
+            item.pos = n.waist_target[mid]
+            item.spd = 0.1
+            item.cur = 60.0
+            msg.cmds.append(item)
+        n.waist_cmd_pub.publish(msg)
+
+    def set_body_preset(self, preset: str):
+        """应用预设姿势（来自 tianyi_body_zin.py 的 z 键功能）。"""
+        presets = {
+            "stand": {"leg51": 0.0255, "leg52": 0.2980, "waist31": -0.000, "waist32": 0.0001},
+        }
+        if preset not in presets:
+            return
+        p = presets[preset]
+        n = self._node
+        if not n.body_initialized:
+            n.leg_target[51] = n.leg_pos[51]
+            n.leg_target[52] = n.leg_pos[52]
+            n.waist_target[31] = n.waist_pos[31]
+            n.waist_target[32] = n.waist_pos[32]
+            n.body_initialized = True
+        n.leg_target[51] = p["leg51"]
+        n.leg_target[52] = p["leg52"]
+        n.waist_target[31] = p["waist31"]
+        n.waist_target[32] = p["waist32"]
+        self._send_leg()
+        self._send_waist()
+
+    def get_body_status(self):
+        n = self._node
+        return {
+            "leg": {str(k): round(v, 4) for k, v in n.leg_pos.items()},
+            "waist": {str(k): round(v, 4) for k, v in n.waist_pos.items()},
+            "leg_target": {str(k): round(v, 4) for k, v in n.leg_target.items()},
+            "waist_target": {str(k): round(v, 4) for k, v in n.waist_target.items()},
+        }
+
+    def send_frame(self, snapshot: BodySnapshot, dt: float = 0.1,
+                   prev_snapshot: BodySnapshot = None, current: float = 2.0):
+        """回放时逐帧发送位置指令，根据帧间距自动计算电机速度。"""
         n = self._node
         arm_msg = CmdSetMotorPosition()
         arm_msg.header.stamp = n.get_clock().now().to_msg()
@@ -313,7 +447,10 @@ class RosBridge:
             item = SetMotorPosition()
             item.name = mid
             item.pos = snapshot.left_arm[i]
-            item.spd = speed
+            if prev_snapshot and dt > 0:
+                item.spd = max(0.05, abs(snapshot.left_arm[i] - prev_snapshot.left_arm[i]) / dt * 1.2)
+            else:
+                item.spd = 0.5
             item.cur = SAFE_LOCK_CURRENT.get(mid, current)
             arm_msg.cmds.append(item)
 
@@ -321,7 +458,10 @@ class RosBridge:
             item = SetMotorPosition()
             item.name = mid
             item.pos = snapshot.right_arm[i]
-            item.spd = speed
+            if prev_snapshot and dt > 0:
+                item.spd = max(0.05, abs(snapshot.right_arm[i] - prev_snapshot.right_arm[i]) / dt * 1.2)
+            else:
+                item.spd = 0.5
             item.cur = SAFE_LOCK_CURRENT.get(mid, current)
             arm_msg.cmds.append(item)
 

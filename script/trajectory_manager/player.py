@@ -64,6 +64,7 @@ class Player:
                 loop_count += 1
                 self.current_loop = loop_count
 
+                prev_snapshot = None
                 for i, frame in enumerate(frames):
                     if not self.playing:
                         return
@@ -74,15 +75,25 @@ class Player:
                         left_hand=frame["left_hand"],
                         right_hand=frame["right_hand"],
                     )
-                    self.bridge.send_frame(snapshot)
+
+                    # 计算帧间隔，用于速度自适应
+                    if i < total - 1:
+                        dt = (frames[i + 1]["timestamp_ms"] - frame["timestamp_ms"]) / 1000.0
+                    elif i > 0:
+                        dt = (frame["timestamp_ms"] - frames[i - 1]["timestamp_ms"]) / 1000.0
+                    else:
+                        dt = 0.1
+                    actual_dt = max(0.01, dt / speed)
+
+                    self.bridge.send_frame(snapshot, dt=actual_dt, prev_snapshot=prev_snapshot)
+                    prev_snapshot = snapshot
 
                     self.progress = (i + 1) / total
                     if self.on_progress:
                         self.on_progress(self.progress)
 
                     if i < total - 1:
-                        dt = (frames[i + 1]["timestamp_ms"] - frame["timestamp_ms"]) / 1000.0
-                        await asyncio.sleep(max(0.01, dt / speed))
+                        await asyncio.sleep(actual_dt)
 
                 # repeat=0 无限循环，否则到达次数后停止
                 if repeat != 0 and loop_count >= repeat:

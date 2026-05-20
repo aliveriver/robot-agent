@@ -60,6 +60,7 @@ async def status_broadcast_loop():
                     "mode": bridge.mode,
                     "joint_modes": bridge.joint_modes,
                     "current_config": bridge.current_config,
+                    "body": bridge.get_body_status(),
                 },
             })
             dead = []
@@ -286,10 +287,40 @@ async def handle_ws_action(action: str, msg: dict) -> dict:
         await player.stop()
         return {"ok": True}
 
+    elif action == "body_delta":
+        target = msg.get("target", "")  # "leg" or "waist"
+        motor_id = int(msg.get("motor_id", 0))
+        delta = float(msg.get("delta", 0.005))
+        bridge.set_body(target, motor_id, delta)
+        return {"ok": True, "body": bridge.get_body_status()}
+
+    elif action == "body_pos":
+        target = msg.get("target", "")
+        motor_id = int(msg.get("motor_id", 0))
+        pos = float(msg.get("pos", 0.0))
+        bridge.set_body_pos(target, motor_id, pos)
+        return {"ok": True, "body": bridge.get_body_status()}
+
+    elif action == "body_preset":
+        preset = msg.get("preset", "stand")
+        bridge.set_body_preset(preset)
+        return {"ok": True, "body": bridge.get_body_status()}
+
+    elif action == "stop_play":
+        await player.stop()
+        return {"ok": True}
+
     return {"ok": False, "error": f"未知动作: {action}"}
 
 
 # ── 静态文件 & 启动 ──────────────────────────────────────────────
+
+URDF_DIR = Path(__file__).parent.parent.parent / "tianyi2_urdf"
+
+# 挂载 URDF meshes 供前端 Three.js 加载
+if URDF_DIR.exists():
+    app.mount("/urdf/meshes", StaticFiles(directory=str(URDF_DIR / "meshes")), name="meshes")
+    app.mount("/urdf/urdf", StaticFiles(directory=str(URDF_DIR / "urdf")), name="urdf_files")
 
 app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
