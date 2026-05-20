@@ -189,6 +189,68 @@ async def delete_trajectory(tid: int):
         await db.close()
 
 
+@app.get("/api/trajectories/{tid}/export")
+async def export_trajectory(tid: int):
+    """导出轨迹为 JSON 文件到 ./output 目录。"""
+    db = await get_db()
+    try:
+        cursor = await db.execute("SELECT * FROM trajectories WHERE id = ?", (tid,))
+        row = await cursor.fetchone()
+        if not row:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        
+        cursor2 = await db.execute(
+            "SELECT frame_index, timestamp_ms, left_arm, right_arm, left_hand, right_hand FROM trajectory_frames WHERE trajectory_id = ? ORDER BY frame_index",
+            (tid,),
+        )
+        frames = await cursor2.fetchall()
+        
+        # 组装导出数据
+        export_data = {
+            "trajectory": {
+                "id": row[0],
+                "name": row[1],
+                "description": row[2],
+                "sample_interval_ms": row[3],
+                "total_frames": row[4],
+                "duration_sec": row[5],
+                "created_at": row[6],
+                "updated_at": row[7],
+            },
+            "frames": [
+                {
+                    "frame_index": f[0],
+                    "timestamp_ms": f[1],
+                    "left_arm": json.loads(f[2]),
+                    "right_arm": json.loads(f[3]),
+                    "left_hand": json.loads(f[4]),
+                    "right_hand": json.loads(f[5]),
+                }
+                for f in frames
+            ],
+        }
+        
+        # 创建 output 目录（在 trajectory_manager 目录下）
+        output_dir = Path(__file__).parent / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 保存为 JSON 文件
+        traj_name = row[1]
+        output_file = output_dir / f"{traj_name}.json"
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        
+        return {
+            "ok": True,
+            "message": f"轨迹已导出到: {output_file}",
+            "path": str(output_file),
+        }
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+    finally:
+        await db.close()
+
+
 @app.get("/api/status")
 async def get_status():
     if not bridge:

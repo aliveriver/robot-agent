@@ -171,7 +171,7 @@ input:focus, select:focus { outline: none; border-color: #00d4ff; }
             <option value="200">200ms</option>
             <option value="500">500ms</option>
         </select>
-        <input type="number" min="10" max="5000" step="10" value="100" id="trajIntervalNum" style="width:70px" placeholder="ms" onchange="syncIntervalSelect(this.value)">
+        <input type="number" min="1" max="5000" step="10" value="100" id="trajIntervalNum" style="width:70px" placeholder="ms" onchange="syncIntervalSelect(this.value)">
 
         <button id="btnRecord" class="record" onclick="toggleRecord()">开始录制</button>
         <button id="btnStopPlay" onclick="stopPlayback()" style="display:none">停止回放</button>
@@ -485,7 +485,6 @@ function toggleRecord() {
         const selectVal = document.getElementById('trajInterval').value;
         const numVal = document.getElementById('trajIntervalNum').value;
         const interval_ms = parseInt(selectVal || numVal || '100');
-        if (interval_ms < 10) { alert('采样间隔不能小于10ms'); return; }
         send('start_record', { name, interval_ms });
     } else {
         send('stop_record');
@@ -508,6 +507,7 @@ async function loadTrajectories() {
                 <div class="traj-actions">
                     <button onclick="playTraj(${t.id})">回放</button>
                     <button onclick="renameTraj(${t.id},'${t.name}')">重命名</button>
+                    <button onclick="exportTraj(${t.id},'${t.name}')">导出</button>
                     <button class="danger" onclick="deleteTraj(${t.id})">删除</button>
                 </div>
             </div>
@@ -545,6 +545,19 @@ function renameTraj(id, oldName) {
 function deleteTraj(id) {
     if (!confirm('确定删除此轨迹？')) return;
     fetch(`/api/trajectories/${id}`, { method: 'DELETE' }).then(() => loadTrajectories());
+}
+
+function exportTraj(id, name) {
+    fetch(`/api/trajectories/${id}/export`)
+        .then(res => res.json())
+        .then(data => {
+            if (data.ok) {
+                alert(`轨迹已导出至：\n${data.path}`);
+            } else {
+                alert(`导出失败：${data.error || '未知错误'}`);
+            }
+        })
+        .catch(e => alert(`导出失败：${e.message}`));
 }
 
 // ── 停止回放 ──
