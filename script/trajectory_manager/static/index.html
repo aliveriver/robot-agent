@@ -307,14 +307,20 @@ function resetRecordUI() {
 function onPlayStatus(msg) {
     const bar = document.getElementById('playBar');
     const fill = document.getElementById('playFill');
+    const btnStop = document.getElementById('btnStopPlay');
     if (msg.playing) {
         playing = true;
         bar.style.display = 'block';
+        if (btnStop) btnStop.style.display = 'inline-block';
         fill.style.width = (msg.progress * 100) + '%';
     } else {
         playing = false;
         fill.style.width = '100%';
-        setTimeout(() => { bar.style.display = 'none'; fill.style.width = '0%'; }, 800);
+        setTimeout(() => {
+            bar.style.display = 'none';
+            fill.style.width = '0%';
+            if (btnStop) btnStop.style.display = 'none';
+        }, 800);
     }
 }
 
@@ -322,6 +328,8 @@ function resetPlayUI() {
     playing = false;
     document.getElementById('playBar').style.display = 'none';
     document.getElementById('playFill').style.width = '0%';
+    const btnStop = document.getElementById('btnStopPlay');
+    if (btnStop) btnStop.style.display = 'none';
 }
 
 function onRecordStatusMsg(msg) {
@@ -343,6 +351,8 @@ function onResult(msg) {
     if (msg.action === 'play' && msg.ok) {
         document.getElementById('playBar').style.display = 'block';
         document.getElementById('playFill').style.width = '0%';
+        const btnStop = document.getElementById('btnStopPlay');
+        if (btnStop) btnStop.style.display = 'inline-block';
     }
     if (msg.action === 'stop_play') {
         resetPlayUI();

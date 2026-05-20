@@ -448,9 +448,9 @@ class RosBridge:
             item.name = mid
             item.pos = snapshot.left_arm[i]
             if prev_snapshot and dt > 0:
-                item.spd = max(0.05, abs(snapshot.left_arm[i] - prev_snapshot.left_arm[i]) / dt * 1.2)
+                item.spd = max(3.14, abs(snapshot.left_arm[i] - prev_snapshot.left_arm[i]) / dt * 1.5)
             else:
-                item.spd = 0.5
+                item.spd = 3.14
             item.cur = SAFE_LOCK_CURRENT.get(mid, current)
             arm_msg.cmds.append(item)
 
@@ -459,9 +459,9 @@ class RosBridge:
             item.name = mid
             item.pos = snapshot.right_arm[i]
             if prev_snapshot and dt > 0:
-                item.spd = max(0.05, abs(snapshot.right_arm[i] - prev_snapshot.right_arm[i]) / dt * 1.2)
+                item.spd = max(3.14, abs(snapshot.right_arm[i] - prev_snapshot.right_arm[i]) / dt * 1.5)
             else:
-                item.spd = 0.5
+                item.spd = 3.14
             item.cur = SAFE_LOCK_CURRENT.get(mid, current)
             arm_msg.cmds.append(item)
 
