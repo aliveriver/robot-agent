@@ -18,6 +18,8 @@ tts:
   ws_url: ""         # 从 .env KOKORO_WS_URL 覆盖
   default_voice: zh_spongebob
   speed: 1.0
+  sentence_delimiters: "。！？!?…\n"      # 流式分句切割符
+  min_chunk_size: 6                       # 分句最小字符数，过短则合并到下一句
 
 # ── ASR ──────────────────────────────────────────────────────
 asr:
