@@ -93,24 +93,59 @@ async def _action_get_arm_status(_params: dict) -> dict:
 async def _action_move_arm(params: dict) -> dict:
     from src.robot_agent.tools.builtin.arm_tools import move_arm_joints
     state = await _build_state()
-    return await move_arm_joints(
-        state,
-        side=params.get("side", "left"),
-        positions=params.get("positions"),
-        kp=params.get("kp", 100.0),
-        kd=params.get("kd", 2.0),
-    )
+    return await move_arm_joints(state, side=params.get("side", "left"), positions=params.get("positions"))
+
+
+async def _action_move_both_arms(params: dict) -> dict:
+    from src.robot_agent.tools.builtin.arm_tools import move_both_arms
+    state = await _build_state()
+    return await move_both_arms(state, left_positions=params.get("left_positions", []), right_positions=params.get("right_positions", []))
 
 
 async def _action_control_hand(params: dict) -> dict:
     from src.robot_agent.tools.builtin.arm_tools import control_hand
     state = await _build_state()
-    return await control_hand(
-        state,
-        side=params.get("side", "right"),
-        gesture=params.get("gesture", "open"),
-        angles=params.get("angles"),
-    )
+    return await control_hand(state, side=params.get("side", "right"), gesture=params.get("gesture", "open"), angles=params.get("angles"))
+
+
+async def _action_control_both_hands(params: dict) -> dict:
+    from src.robot_agent.tools.builtin.arm_tools import control_both_hands
+    state = await _build_state()
+    return await control_both_hands(state, left_gesture="custom", right_gesture="custom", left_angles=params.get("left_angles"), right_angles=params.get("right_angles"))
+
+
+_arm_pose_store_instance = None
+
+
+def _arm_pose_store():
+    global _arm_pose_store_instance
+    if _arm_pose_store_instance is None:
+        from src.robot_agent.interfaces.arm_pose_store import ArmPoseStore
+        _arm_pose_store_instance = ArmPoseStore()
+    return _arm_pose_store_instance
+
+
+async def _action_arm_pose_list(_params: dict) -> dict:
+    return {"poses": _arm_pose_store().list()}
+
+
+async def _action_arm_pose_save(params: dict) -> dict:
+    return await asyncio.to_thread(_arm_pose_store().save, params.get("name", ""), params.get("left_positions", []), params.get("right_positions", []))
+
+
+async def _action_arm_pose_delete(params: dict) -> dict:
+    return await asyncio.to_thread(_arm_pose_store().delete, params.get("pose_id", ""))
+
+
+async def _action_arm_pose_execute(params: dict) -> dict:
+    if not params.get("safety_confirmed", False):
+        raise ValueError("执行固定动作前必须确认周围安全")
+    pose = _arm_pose_store().get(params.get("pose_id", ""))
+    from src.robot_agent.tools.builtin.arm_tools import move_both_arms
+    state = await _build_state()
+    result = await move_both_arms(state, left_positions=pose["left"], right_positions=pose["right"])
+    result["pose"] = pose
+    return result
 
 
 async def _action_reset_arms(_params: dict) -> dict:
@@ -198,7 +233,13 @@ _ACTION_HANDLERS: dict[str, Any] = {
     "get_status": _action_get_status,
     "get_arm_status": _action_get_arm_status,
     "move_arm": _action_move_arm,
+    "move_both_arms": _action_move_both_arms,
     "control_hand": _action_control_hand,
+    "control_both_hands": _action_control_both_hands,
+    "arm_pose_list": _action_arm_pose_list,
+    "arm_pose_save": _action_arm_pose_save,
+    "arm_pose_delete": _action_arm_pose_delete,
+    "arm_pose_execute": _action_arm_pose_execute,
     "reset_arms": _action_reset_arms,
     "list_gestures": _action_list_gestures,
     "say": _action_say,
