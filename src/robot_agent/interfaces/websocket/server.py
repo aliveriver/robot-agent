@@ -257,7 +257,13 @@ async def websocket_endpoint(ws: WebSocket):
 
                 try:
                     result = await handler(params)
-                    await _send(ws, {"type": "result", "id": req_id, "ok": True, "data": result})
+                    # 工具层会用 {ok: false, error: ...} 表示硬件未就绪。
+                    # 不能再包成外层 ok=true，否则 App 会误报“执行成功”。
+                    tool_ok = not isinstance(result, dict) or result.get("ok", True) is not False
+                    payload = {"type": "result", "id": req_id, "ok": tool_ok, "data": result}
+                    if not tool_ok:
+                        payload["error"] = result.get("error") or result.get("message") or "硬件指令执行失败"
+                    await _send(ws, payload)
                 except Exception as exc:
                     logger.exception("ws: command failed", action=action, error=str(exc))
                     await _send(ws, {"type": "result", "id": req_id, "ok": False, "error": str(exc)})

@@ -98,7 +98,7 @@ class ArmPublisher:
         )
 
         if self._sim_mode:
-            return
+            raise RuntimeError("机械臂 ROS2 硬件适配未就绪，请先完成机器人自检")
 
         msg = CmdSetMotorPosition()
         msg.header.stamp = self._node.get_clock().now().to_msg()
