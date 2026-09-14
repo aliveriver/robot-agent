@@ -16,10 +16,11 @@ AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_FILE="${AGENT_DIR}/robot-agent.log"
 
 echo "[wifi] 正在连接: ${SSID}"
-nmcli device wifi connect "${SSID}" password "${PASSWORD}"
+sudo nmcli device wifi rescan || true
+sudo nmcli device wifi connect "${SSID}" password "${PASSWORD}"
 
 # 保留连接配置以便手动重连，但禁止开机自动抢占其他 Wi-Fi。
-nmcli connection modify "${SSID}" connection.autoconnect no
+sudo nmcli connection modify "${SSID}" connection.autoconnect no
 
 echo "[wifi] 已连接，IPv4 地址:"
 nmcli -g IP4.ADDRESS device show | sed '/^$/d'
