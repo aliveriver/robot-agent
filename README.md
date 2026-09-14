@@ -85,7 +85,7 @@ Agent 启动后在 `0.0.0.0:8765` 提供 WebSocket 接口，App 使用
 
 - `trajectory_status`：读取 `idle / recording / replaying` 状态。
 - `trajectory_list`：列出轨迹名称、时长、采样周期、帧数和创建时间。
-- `trajectory_record_start`：参数 `name`、`sample_interval`（0.02–1 秒）、
+- `trajectory_record_start`：参数 `name`、`sample_interval`（0.01–1 秒）、
   `max_duration`（1–600 秒）。
 - `trajectory_record_stop`：停止、保存并返回新轨迹 ID。
 - `trajectory_replay_start`：参数 `trajectory_id`、`speed_scale`（0.1–2）、

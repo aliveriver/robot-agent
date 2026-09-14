@@ -158,11 +158,18 @@ async def _action_trajectory_list(_params: dict) -> dict:
     return {"trajectories": _trajectory_manager().list_trajectories()}
 
 
+async def _action_trajectory_delete(params: dict) -> dict:
+    return await asyncio.to_thread(
+        _trajectory_manager().delete_trajectory,
+        params.get("trajectory_id", ""),
+    )
+
+
 async def _action_trajectory_record_start(params: dict) -> dict:
     return await asyncio.to_thread(
         _trajectory_manager().start_record,
         name=params.get("name", "未命名轨迹"),
-        sample_interval=params.get("sample_interval", 0.1),
+        sample_interval=params.get("sample_interval", 0.01),
         max_duration=params.get("max_duration", 60.0),
     )
 
@@ -199,6 +206,7 @@ _ACTION_HANDLERS: dict[str, Any] = {
     "sleep": _action_sleep,
     "trajectory_status": _action_trajectory_status,
     "trajectory_list": _action_trajectory_list,
+    "trajectory_delete": _action_trajectory_delete,
     "trajectory_record_start": _action_trajectory_record_start,
     "trajectory_record_stop": _action_trajectory_record_stop,
     "trajectory_replay_start": _action_trajectory_replay_start,

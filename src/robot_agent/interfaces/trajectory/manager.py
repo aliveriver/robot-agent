@@ -52,11 +52,17 @@ class TrajectoryManager:
     def list_trajectories(self) -> list[dict[str, Any]]:
         return self.store.list()
 
+    def delete_trajectory(self, trajectory_id: str) -> dict[str, Any]:
+        with self._lock:
+            self._ensure_idle()
+        self.store.delete(trajectory_id)
+        return {"deleted": trajectory_id}
+
     def start_record(self, *, name: str, sample_interval: float, max_duration: float) -> dict[str, Any]:
         name = name.strip()
         if not name:
             raise ValueError("轨迹名称不能为空")
-        interval = _clamp(sample_interval, 0.02, 1.0)
+        interval = _clamp(sample_interval, 0.01, 1.0)
         duration = _clamp(max_duration, 1.0, 600.0)
         hardware = self._get_hardware()
         with self._lock:
@@ -156,7 +162,7 @@ class TrajectoryManager:
                     break
                 if now >= next_teach_heartbeat:
                     hardware.set_teach_mode()
-                    next_teach_heartbeat = now + 0.1
+                    next_teach_heartbeat = now + 0.01
                 if now >= next_sample:
                     frame = hardware.snapshot()
                     frame["t"] = round(elapsed, 6)
@@ -187,13 +193,20 @@ class TrajectoryManager:
     def _replay_worker(self, hardware: Any, trajectory: dict[str, Any], speed: float, smoothing: float, repeats: int) -> None:
         frames = trajectory["frames"]
         total = len(frames) * repeats
-        interval = trajectory["sample_interval"] / speed
         previous: dict[str, Any] | None = None
         completed = 0
         try:
             for _ in range(repeats):
-                for raw_frame in frames:
+                replay_started = time.monotonic()
+                first_t = float(frames[0].get("t", 0.0))
+                for frame_index, raw_frame in enumerate(frames):
                     if self._stop.is_set():
+                        return
+                    recorded_t = float(
+                        raw_frame.get("t", frame_index * trajectory["sample_interval"])
+                    ) - first_t
+                    target_t = replay_started + recorded_t / speed
+                    if self._stop.wait(max(0.0, target_t - time.monotonic())):
                         return
                     frame = self._smooth_frame(previous, raw_frame, smoothing)
                     hardware.publish_frame(frame, speed)
@@ -201,8 +214,6 @@ class TrajectoryManager:
                     completed += 1
                     with self._lock:
                         self._progress = completed / total
-                    if self._stop.wait(interval):
-                        return
         except Exception as exc:
             with self._lock:
                 self._last_error = str(exc)

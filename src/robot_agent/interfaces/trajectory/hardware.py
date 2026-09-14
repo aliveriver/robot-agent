@@ -10,6 +10,10 @@ from typing import Any
 LEFT_ARM_IDS = list(range(11, 18))
 RIGHT_ARM_IDS = list(range(21, 28))
 ALL_ARM_IDS = LEFT_ARM_IDS + RIGHT_ARM_IDS
+ARM_CURRENT_LIMITS = {
+    **{motor_id: 8.0 for motor_id in (11, 12, 13, 14, 21, 22, 23, 24)},
+    **{motor_id: 4.0 for motor_id in (15, 16, 17, 25, 26, 27)},
+}
 
 
 class RosTrajectoryHardware:
@@ -76,7 +80,7 @@ class RosTrajectoryHardware:
         self._publish_arm(
             frame["arms"],
             speed=max(0.3, 3.14 * speed_scale),
-            current=2.0,
+            current=None,
             frame_id="trajectory_playback",
         )
         for side, key, publisher in (
@@ -89,7 +93,7 @@ class RosTrajectoryHardware:
             msg.position = [float(value) for value in frame[key]]
             publisher.publish(msg)
 
-    def _publish_arm(self, arms: dict[str, float], *, speed: float, current: float, frame_id: str) -> None:
+    def _publish_arm(self, arms: dict[str, float], *, speed: float, current: float | None, frame_id: str) -> None:
         msg = self._CmdSetMotorPosition()
         msg.header.stamp = self._node.get_clock().now().to_msg()
         msg.header.frame_id = frame_id
@@ -99,7 +103,7 @@ class RosTrajectoryHardware:
             item.name = int(motor_id)
             item.pos = float(position)
             item.spd = float(speed)
-            item.cur = float(current)
+            item.cur = float(ARM_CURRENT_LIMITS[int(motor_id)] if current is None else current)
             msg.cmds.append(item)
         self._arm_pub.publish(msg)
 

@@ -70,6 +70,14 @@ class TrajectoryManagerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.manager.start_replay(trajectory_id=trajectory_id)
 
+    def test_delete_trajectory(self):
+        self.manager.start_record(name="delete-me", sample_interval=0.01, max_duration=1)
+        time.sleep(0.04)
+        self.manager.stop_record()
+        trajectory_id = self.manager.list_trajectories()[0]["id"]
+        self.assertEqual(self.manager.delete_trajectory(trajectory_id)["deleted"], trajectory_id)
+        self.assertEqual(self.manager.list_trajectories(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

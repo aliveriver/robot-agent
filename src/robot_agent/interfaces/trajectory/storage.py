@@ -104,3 +104,10 @@ class TrajectoryStore:
         if include_frames:
             result["frames"] = json.loads(result.pop("frames_json"))
         return result
+
+    def delete(self, trajectory_id: str) -> None:
+        with self._lock, closing(self._connect()) as connection:
+            cursor = connection.execute("DELETE FROM trajectories WHERE id = ?", (trajectory_id,))
+            connection.commit()
+        if cursor.rowcount == 0:
+            raise KeyError(f"trajectory not found: {trajectory_id}")
