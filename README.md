@@ -75,6 +75,27 @@ flowchart TD
 
 *(关于项目的环境与基础启动脚本见根目录相关 `sh` 或 `requirements.txt`。)*
 
+## 手机端轨迹录制与回放
+
+Agent 启动后在 `0.0.0.0:8765` 提供 WebSocket 接口，App 使用
+`ws://<机器人IP>:8765/ws` 连接。轨迹保存在机器人本机的
+`data/trajectories.sqlite3`（可用 `TRAJECTORY_DB_PATH` 覆盖）。
+
+轨迹指令均沿用现有 `{type, action, params, id}` 协议：
+
+- `trajectory_status`：读取 `idle / recording / replaying` 状态。
+- `trajectory_list`：列出轨迹名称、时长、采样周期、帧数和创建时间。
+- `trajectory_record_start`：参数 `name`、`sample_interval`（0.02–1 秒）、
+  `max_duration`（1–600 秒）。
+- `trajectory_record_stop`：停止、保存并返回新轨迹 ID。
+- `trajectory_replay_start`：参数 `trajectory_id`、`speed_scale`（0.1–2）、
+  `smoothing`（0–0.95）、`repeat_count`（1–10）和必须为真的
+  `safety_confirmed`。
+- `trajectory_replay_stop`：立即停止继续下发回放帧。
+
+录制和回放严格互斥；最后一个手机连接断开时会停止当前任务。录制期间
+以 10Hz 持续发送示教松弛指令，采样频率则由 App 单独配置。
+
 ---
 
 ## 🐛 如何 Debug (调试指南)
