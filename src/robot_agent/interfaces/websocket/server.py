@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import Any, Set
 
@@ -21,12 +22,35 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.graph.state import AgentState
 from src.robot_agent.runtime import runtime_session
-from src.robot_agent.settings import settings
 
-logger = get_logger(__name__)
+
+class _ProtocolLogger:
+    """保持结构化日志调用形式，同时允许通信服务独立启动。"""
+
+    def __init__(self) -> None:
+        self._logger = logging.getLogger(__name__)
+
+    def _write(self, level: str, message: str, **fields: Any) -> None:
+        suffix = " ".join(f"{key}={value!r}" for key, value in fields.items())
+        getattr(self._logger, level)(f"{message} {suffix}".rstrip())
+
+    def info(self, message: str, **fields: Any) -> None:
+        self._write("info", message, **fields)
+
+    def warning(self, message: str, **fields: Any) -> None:
+        self._write("warning", message, **fields)
+
+    def debug(self, message: str, **fields: Any) -> None:
+        self._write("debug", message, **fields)
+
+    def exception(self, message: str, **fields: Any) -> None:
+        suffix = " ".join(f"{key}={value!r}" for key, value in fields.items())
+        self._logger.exception(f"{message} {suffix}".rstrip())
+
+
+logger = _ProtocolLogger()
 
 app = FastAPI(title="Robot Remote Control")
 _clients: Set[WebSocket] = set()
@@ -34,6 +58,8 @@ _server_task: asyncio.Task | None = None
 
 
 async def _build_state() -> AgentState:
+    from src.robot_agent.settings import settings
+
     return AgentState(
         session_id="ws_remote",
         user_id="app_user",
@@ -119,6 +145,47 @@ async def _action_sleep(_params: dict) -> dict:
     return {"ok": True, "wake_state": "sleep"}
 
 
+def _trajectory_manager():
+    from src.robot_agent.interfaces.trajectory import get_trajectory_manager
+    return get_trajectory_manager()
+
+
+async def _action_trajectory_status(_params: dict) -> dict:
+    return _trajectory_manager().status()
+
+
+async def _action_trajectory_list(_params: dict) -> dict:
+    return {"trajectories": _trajectory_manager().list_trajectories()}
+
+
+async def _action_trajectory_record_start(params: dict) -> dict:
+    return await asyncio.to_thread(
+        _trajectory_manager().start_record,
+        name=params.get("name", "未命名轨迹"),
+        sample_interval=params.get("sample_interval", 0.1),
+        max_duration=params.get("max_duration", 60.0),
+    )
+
+
+async def _action_trajectory_record_stop(_params: dict) -> dict:
+    return await asyncio.to_thread(_trajectory_manager().stop_record)
+
+
+async def _action_trajectory_replay_start(params: dict) -> dict:
+    return await asyncio.to_thread(
+        _trajectory_manager().start_replay,
+        trajectory_id=params.get("trajectory_id", ""),
+        speed_scale=params.get("speed_scale", 1.0),
+        smoothing=params.get("smoothing", 0.0),
+        repeat_count=params.get("repeat_count", 1),
+        safety_confirmed=params.get("safety_confirmed", False),
+    )
+
+
+async def _action_trajectory_replay_stop(_params: dict) -> dict:
+    return await asyncio.to_thread(_trajectory_manager().stop_replay)
+
+
 _ACTION_HANDLERS: dict[str, Any] = {
     "ping": _action_ping,
     "get_status": _action_get_status,
@@ -130,6 +197,12 @@ _ACTION_HANDLERS: dict[str, Any] = {
     "say": _action_say,
     "wake": _action_wake,
     "sleep": _action_sleep,
+    "trajectory_status": _action_trajectory_status,
+    "trajectory_list": _action_trajectory_list,
+    "trajectory_record_start": _action_trajectory_record_start,
+    "trajectory_record_stop": _action_trajectory_record_stop,
+    "trajectory_replay_start": _action_trajectory_replay_start,
+    "trajectory_replay_stop": _action_trajectory_replay_stop,
 }
 
 
@@ -199,6 +272,11 @@ async def websocket_endpoint(ws: WebSocket):
         logger.debug("ws: connection error", error=str(exc))
     finally:
         _clients.discard(ws)
+        if not _clients:
+            try:
+                await asyncio.to_thread(_trajectory_manager().stop_active)
+            except Exception as exc:
+                logger.warning("ws: failed to stop active trajectory", error=str(exc))
         logger.info("ws: client disconnected", remote=str(remote))
 
 
