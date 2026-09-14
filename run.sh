@@ -30,9 +30,17 @@ AGENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${AGENT_DIR}"
 echo "[run.sh] Starting robot-agent from ${AGENT_DIR}"
 
-# 如果在 conda 环境里，直接用当前 Python；否则尝试激活 agent 环境
-if conda activate agent 2>/dev/null; then
-    echo "[run.sh] conda env: agent"
+# systemd/nohup 等非交互 shell 不会自动定义 `conda activate`，
+# 显式加载 conda.sh，确保总是使用机器人已配置的 agent 环境。
+CONDA_SH="${CONDA_SH:-/home/nvidia/miniconda3/etc/profile.d/conda.sh}"
+if [ -f "${CONDA_SH}" ]; then
+    source "${CONDA_SH}"
 fi
+
+if ! conda activate agent 2>/dev/null; then
+    echo "[run.sh] ERROR: cannot activate conda env: agent" >&2
+    exit 1
+fi
+echo "[run.sh] conda env: agent"
 
 exec python -m src.robot_agent.app "$@"
