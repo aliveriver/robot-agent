@@ -153,6 +153,10 @@ async def _action_arm_tension(params: dict) -> dict:
     )
 
 
+async def _action_release_both_hands(_params: dict) -> dict:
+    return await asyncio.to_thread(_trajectory_manager().release_both_hands)
+
+
 async def _action_arm_pose_delete(params: dict) -> dict:
     return await asyncio.to_thread(_arm_pose_store().delete, params.get("pose_id", ""))
 
@@ -256,6 +260,7 @@ _ACTION_HANDLERS: dict[str, Any] = {
     "arm_pose_save": _action_arm_pose_save,
     "joint_state_read": _action_joint_state_read,
     "arm_tension": _action_arm_tension,
+    "release_both_hands": _action_release_both_hands,
     "arm_pose_delete": _action_arm_pose_delete,
     "arm_pose_execute": _action_arm_pose_execute,
     "reset_arms": _action_reset_arms,
