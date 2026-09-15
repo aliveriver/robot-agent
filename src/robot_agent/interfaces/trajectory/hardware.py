@@ -82,8 +82,9 @@ class RosTrajectoryHardware:
                     return {
                         "left": [self._arms[motor_id] for motor_id in LEFT_ARM_IDS],
                         "right": [self._arms[motor_id] for motor_id in RIGHT_ARM_IDS],
-                        "left_hand": copy.deepcopy(self._hands["left"]),
-                        "right_hand": copy.deepcopy(self._hands["right"]),
+                        # 手驱动反馈为 1=松开、0=握紧；App/工具统一使用 0=松、1=紧。
+                        "left_hand": [1.0 - value for value in self._hands["left"]],
+                        "right_hand": [1.0 - value for value in self._hands["right"]],
                     }
             time.sleep(0.05)
         with self._lock:
@@ -95,6 +96,21 @@ class RosTrajectoryHardware:
             if not self._has_hand_frame["right"]:
                 missing.append("/inspire_hand/state/right_hand")
         raise RuntimeError(f"机器人关节反馈未就绪：{', '.join(missing)}")
+
+    def set_arm_tension(self, side: str, tight: bool) -> dict[str, Any]:
+        """在当前位置松弛或重新绷紧指定手臂。"""
+        if side not in {"left", "right"}:
+            raise ValueError("side 必须是 left 或 right")
+        frame = self.snapshot()
+        ids = LEFT_ARM_IDS if side == "left" else RIGHT_ARM_IDS
+        positions = {str(motor_id): frame["arms"][str(motor_id)] for motor_id in ids}
+        self._publish_arm(
+            positions,
+            speed=1.0 if tight else 0.0,
+            current=None if tight else 0.0,
+            frame_id=f"{side}_arm_{'tight' if tight else 'relax'}",
+        )
+        return {"ok": True, "side": side, "tight": tight}
 
     def set_teach_mode(self) -> None:
         """发送零速度、零电流命令，使双臂进入可拖动录制状态。"""

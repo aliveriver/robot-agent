@@ -145,6 +145,14 @@ async def _action_joint_state_read(_params: dict) -> dict:
     return await asyncio.to_thread(_trajectory_manager().current_joint_state)
 
 
+async def _action_arm_tension(params: dict) -> dict:
+    return await asyncio.to_thread(
+        _trajectory_manager().set_arm_tension,
+        params.get("side", ""),
+        bool(params.get("tight", False)),
+    )
+
+
 async def _action_arm_pose_delete(params: dict) -> dict:
     return await asyncio.to_thread(_arm_pose_store().delete, params.get("pose_id", ""))
 
@@ -262,6 +270,7 @@ _ACTION_HANDLERS: dict[str, Any] = {
     "arm_pose_list": _action_arm_pose_list,
     "arm_pose_save": _action_arm_pose_save,
     "joint_state_read": _action_joint_state_read,
+    "arm_tension": _action_arm_tension,
     "arm_pose_delete": _action_arm_pose_delete,
     "arm_pose_execute": _action_arm_pose_execute,
     "reset_arms": _action_reset_arms,

@@ -40,6 +40,9 @@ class TrajectoryManager:
     def current_joint_state(self) -> dict[str, list[float]]:
         return self._get_hardware().current_joint_state()
 
+    def set_arm_tension(self, side: str, tight: bool) -> dict[str, Any]:
+        return self._get_hardware().set_arm_tension(side, tight)
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             elapsed = time.monotonic() - self._started_at if self._started_at else 0.0
