@@ -39,6 +39,7 @@ class RosTrajectoryHardware:
         self._has_hand_frame = {"left": False, "right": False}
         self._arm_modes = {"left": "idle", "right": "idle"}
         self._arm_lock_targets = {"left": {}, "right": {}}
+        self._held_hands: dict[str, list[float]] | None = None
         self._node = Node("robot_agent_trajectory")
         self._node.create_subscription(MotorStatusMsg, "/arm/status", self._on_arm, 10)
         self._node.create_subscription(JointState, "/inspire_hand/state/left_hand", lambda msg: self._on_hand("left", msg), 10)
@@ -116,6 +117,20 @@ class RosTrajectoryHardware:
     def clear_arm_tension(self) -> None:
         with self._lock:
             self._arm_modes = {"left": "idle", "right": "idle"}
+            self._held_hands = None
+
+    def hold_frame(self, frame: dict[str, Any]) -> None:
+        """轨迹结束后持续保持末帧的双臂和双手位置。"""
+        with self._lock:
+            self._arm_lock_targets = {
+                "left": {str(mid): float(frame["arms"][str(mid)]) for mid in LEFT_ARM_IDS},
+                "right": {str(mid): float(frame["arms"][str(mid)]) for mid in RIGHT_ARM_IDS},
+            }
+            self._arm_modes = {"left": "tight", "right": "tight"}
+            self._held_hands = {
+                "left": [float(value) for value in frame["lhand"]],
+                "right": [float(value) for value in frame["rhand"]],
+            }
 
     def _tension_loop(self) -> None:
         while True:
@@ -123,6 +138,7 @@ class RosTrajectoryHardware:
                 modes = dict(self._arm_modes)
                 targets = copy.deepcopy(self._arm_lock_targets)
                 current = {str(key): value for key, value in self._arms.items()}
+                held_hands = copy.deepcopy(self._held_hands)
             for side, mode in modes.items():
                 if mode == "idle":
                     continue
@@ -138,6 +154,9 @@ class RosTrajectoryHardware:
                     current=None if mode == "tight" else 0.0,
                     frame_id=f"{side}_arm_{mode}",
                 )
+            if held_hands is not None:
+                self._publish_hand_positions("left", held_hands["left"])
+                self._publish_hand_positions("right", held_hands["right"])
             time.sleep(0.1)
 
     def set_teach_mode(self) -> None:
@@ -153,15 +172,16 @@ class RosTrajectoryHardware:
             current=None,
             frame_id="trajectory_playback",
         )
-        for side, key, publisher in (
-            ("left", "lhand", self._left_hand_pub),
-            ("right", "rhand", self._right_hand_pub),
-        ):
-            msg = self._JointState()
-            msg.header.stamp = self._node.get_clock().now().to_msg()
-            msg.name = ["1", "2", "3", "4", "5", "6"]
-            msg.position = [float(value) for value in frame[key]]
-            publisher.publish(msg)
+        self._publish_hand_positions("left", frame["lhand"])
+        self._publish_hand_positions("right", frame["rhand"])
+
+    def _publish_hand_positions(self, side: str, positions: list[float]) -> None:
+        msg = self._JointState()
+        msg.header.stamp = self._node.get_clock().now().to_msg()
+        msg.name = ["1", "2", "3", "4", "5", "6"]
+        msg.position = [float(value) for value in positions]
+        publisher = self._left_hand_pub if side == "left" else self._right_hand_pub
+        publisher.publish(msg)
 
     def _publish_arm(self, arms: dict[str, float], *, speed: float, current: float | None, frame_id: str) -> None:
         msg = self._CmdSetMotorPosition()

@@ -110,7 +110,7 @@ class TrajectoryManager:
     ) -> dict[str, Any]:
         if not safety_confirmed:
             raise ValueError("回放前必须确认机器人周围安全")
-        speed = _clamp(speed_scale, 0.1, 2.0)
+        speed = _clamp(speed_scale, 0.1, 1.0)
         smooth = _clamp(smoothing, 0.0, 0.95)
         repeats = max(1, min(10, int(repeat_count)))
         trajectory = self.store.get(trajectory_id)
@@ -230,6 +230,9 @@ class TrajectoryManager:
             with self._lock:
                 self._last_error = str(exc)
         finally:
+            hold_frame = getattr(hardware, "hold_frame", None)
+            if previous is not None and hold_frame is not None:
+                hold_frame(previous)
             self._finish()
 
     @staticmethod
