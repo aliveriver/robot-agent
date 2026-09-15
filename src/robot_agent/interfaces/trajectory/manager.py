@@ -37,6 +37,9 @@ class TrajectoryManager:
             self._hardware.wait_ready()
         return self._hardware
 
+    def current_joint_state(self) -> dict[str, list[float]]:
+        return self._get_hardware().current_joint_state()
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             elapsed = time.monotonic() - self._started_at if self._started_at else 0.0

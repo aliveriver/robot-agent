@@ -36,6 +36,7 @@ class RosTrajectoryHardware:
         self._arms = {motor_id: 0.0 for motor_id in ALL_ARM_IDS}
         self._hands = {"left": [1.0] * 6, "right": [1.0] * 6}
         self._has_arm_frame = False
+        self._has_hand_frame = {"left": False, "right": False}
         self._node = Node("robot_agent_trajectory")
         self._node.create_subscription(MotorStatusMsg, "/arm/status", self._on_arm, 10)
         self._node.create_subscription(JointState, "/inspire_hand/state/left_hand", lambda msg: self._on_hand("left", msg), 10)
@@ -60,6 +61,7 @@ class RosTrajectoryHardware:
         if len(msg.position) >= 6:
             with self._lock:
                 self._hands[side] = [float(value) for value in msg.position[:6]]
+                self._has_hand_frame[side] = True
 
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
@@ -70,6 +72,29 @@ class RosTrajectoryHardware:
                 "lhand": copy.deepcopy(self._hands["left"]),
                 "rhand": copy.deepcopy(self._hands["right"]),
             }
+
+    def current_joint_state(self, timeout: float = 2.0) -> dict[str, list[float]]:
+        """返回机器人反馈话题中的真实双臂、双手关节位置。"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._has_arm_frame and all(self._has_hand_frame.values()):
+                    return {
+                        "left": [self._arms[motor_id] for motor_id in LEFT_ARM_IDS],
+                        "right": [self._arms[motor_id] for motor_id in RIGHT_ARM_IDS],
+                        "left_hand": copy.deepcopy(self._hands["left"]),
+                        "right_hand": copy.deepcopy(self._hands["right"]),
+                    }
+            time.sleep(0.05)
+        with self._lock:
+            missing = []
+            if not self._has_arm_frame:
+                missing.append("/arm/status")
+            if not self._has_hand_frame["left"]:
+                missing.append("/inspire_hand/state/left_hand")
+            if not self._has_hand_frame["right"]:
+                missing.append("/inspire_hand/state/right_hand")
+        raise RuntimeError(f"机器人关节反馈未就绪：{', '.join(missing)}")
 
     def set_teach_mode(self) -> None:
         """发送零速度、零电流命令，使双臂进入可拖动录制状态。"""
