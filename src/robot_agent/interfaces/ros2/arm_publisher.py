@@ -38,7 +38,7 @@ LEFT_ARM_IDS: list[int]  = list(range(11, 18))   # 11~17
 RIGHT_ARM_IDS: list[int] = list(range(21, 28))   # 21~27
 ARM_CURRENT_LIMITS: dict[int, float] = {
     **{motor_id: 8.0 for motor_id in (11, 12, 13, 14, 21, 22, 23, 24)},
-    **{motor_id: 4.0 for motor_id in (15, 16, 17, 25, 26, 27)},
+    **{motor_id: 3.5 for motor_id in (15, 16, 17, 25, 26, 27)},
 }
 
 
