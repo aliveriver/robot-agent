@@ -43,6 +43,9 @@ class TrajectoryManager:
     def set_arm_tension(self, side: str, tight: bool) -> dict[str, Any]:
         return self._get_hardware().set_arm_tension(side, tight)
 
+    def hold_fixed_pose(self, pose: dict[str, Any]) -> dict[str, Any]:
+        return self._get_hardware().hold_fixed_pose(pose)
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             elapsed = time.monotonic() - self._started_at if self._started_at else 0.0
@@ -110,7 +113,7 @@ class TrajectoryManager:
     ) -> dict[str, Any]:
         if not safety_confirmed:
             raise ValueError("回放前必须确认机器人周围安全")
-        speed = _clamp(speed_scale, 0.1, 1.0)
+        speed = _clamp(speed_scale, 0.1, 2.0)
         smooth = _clamp(smoothing, 0.0, 0.95)
         repeats = max(1, min(10, int(repeat_count)))
         trajectory = self.store.get(trajectory_id)
@@ -230,9 +233,6 @@ class TrajectoryManager:
             with self._lock:
                 self._last_error = str(exc)
         finally:
-            hold_frame = getattr(hardware, "hold_frame", None)
-            if previous is not None and hold_frame is not None:
-                hold_frame(previous)
             self._finish()
 
     @staticmethod

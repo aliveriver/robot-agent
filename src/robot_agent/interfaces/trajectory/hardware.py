@@ -119,18 +119,20 @@ class RosTrajectoryHardware:
             self._arm_modes = {"left": "idle", "right": "idle"}
             self._held_hands = None
 
-    def hold_frame(self, frame: dict[str, Any]) -> None:
-        """轨迹结束后持续保持末帧的双臂和双手位置。"""
+    def hold_fixed_pose(self, pose: dict[str, Any]) -> dict[str, Any]:
+        """以较低速度到达固定动作，并持续保持双臂和双手目标。"""
         with self._lock:
             self._arm_lock_targets = {
-                "left": {str(mid): float(frame["arms"][str(mid)]) for mid in LEFT_ARM_IDS},
-                "right": {str(mid): float(frame["arms"][str(mid)]) for mid in RIGHT_ARM_IDS},
+                "left": {str(mid): float(value) for mid, value in zip(LEFT_ARM_IDS, pose["left"])},
+                "right": {str(mid): float(value) for mid, value in zip(RIGHT_ARM_IDS, pose["right"])},
             }
             self._arm_modes = {"left": "tight", "right": "tight"}
+            # 固定动作存储/App 使用 0=松、1=紧；驱动使用相反方向。
             self._held_hands = {
-                "left": [float(value) for value in frame["lhand"]],
-                "right": [float(value) for value in frame["rhand"]],
+                "left": [1.0 - float(value) for value in pose.get("left_hand", [0.0] * 6)],
+                "right": [1.0 - float(value) for value in pose.get("right_hand", [0.0] * 6)],
             }
+        return {"ok": True, "message": "固定动作目标已下发并进入持续保持", "pose": pose}
 
     def _tension_loop(self) -> None:
         while True:

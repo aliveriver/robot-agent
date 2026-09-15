@@ -161,22 +161,7 @@ async def _action_arm_pose_execute(params: dict) -> dict:
     if not params.get("safety_confirmed", False):
         raise ValueError("执行固定动作前必须确认周围安全")
     pose = _arm_pose_store().get(params.get("pose_id", ""))
-    from src.robot_agent.tools.builtin.arm_tools import move_both_arms
-    state = await _build_state()
-    result = await move_both_arms(state, left_positions=pose["left"], right_positions=pose["right"])
-    if result.get("ok", False):
-        from src.robot_agent.tools.builtin.arm_tools import control_both_hands
-        hand_result = await control_both_hands(
-            state,
-            left_gesture="custom",
-            right_gesture="custom",
-            left_angles=pose.get("left_hand", [0.0] * 6),
-            right_angles=pose.get("right_hand", [0.0] * 6),
-        )
-        if not hand_result.get("ok", False):
-            return hand_result
-    result["pose"] = pose
-    return result
+    return await asyncio.to_thread(_trajectory_manager().hold_fixed_pose, pose)
 
 
 async def _action_reset_arms(_params: dict) -> dict:
