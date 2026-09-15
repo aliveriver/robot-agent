@@ -71,6 +71,9 @@ class TrajectoryManager:
         interval = _clamp(sample_interval, 0.01, 1.0)
         duration = _clamp(max_duration, 1.0, 600.0)
         hardware = self._get_hardware()
+        clear_tension = getattr(hardware, "clear_arm_tension", None)
+        if clear_tension is not None:
+            clear_tension()
         with self._lock:
             self._ensure_idle()
             self._mode = "recording"
@@ -114,6 +117,9 @@ class TrajectoryManager:
         if not trajectory["frames"]:
             raise ValueError("轨迹没有可回放帧")
         hardware = self._get_hardware()
+        clear_tension = getattr(hardware, "clear_arm_tension", None)
+        if clear_tension is not None:
+            clear_tension()
         with self._lock:
             self._ensure_idle()
             self._mode = "replaying"
