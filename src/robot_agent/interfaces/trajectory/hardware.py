@@ -12,7 +12,7 @@ RIGHT_ARM_IDS = list(range(21, 28))
 ALL_ARM_IDS = LEFT_ARM_IDS + RIGHT_ARM_IDS
 ARM_CURRENT_LIMITS = {
     **{motor_id: 8.0 for motor_id in (11, 12, 13, 14, 21, 22, 23, 24)},
-    **{motor_id: 4.0 for motor_id in (15, 16, 17, 25, 26, 27)},
+    **{motor_id: 3.5 for motor_id in (15, 16, 17, 25, 26, 27)},
 }
 
 
