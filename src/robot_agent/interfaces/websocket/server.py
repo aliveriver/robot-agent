@@ -130,7 +130,14 @@ async def _action_arm_pose_list(_params: dict) -> dict:
 
 
 async def _action_arm_pose_save(params: dict) -> dict:
-    return await asyncio.to_thread(_arm_pose_store().save, params.get("name", ""), params.get("left_positions", []), params.get("right_positions", []))
+    return await asyncio.to_thread(
+        _arm_pose_store().save,
+        params.get("name", ""),
+        params.get("left_positions", []),
+        params.get("right_positions", []),
+        params.get("left_hand", []),
+        params.get("right_hand", []),
+    )
 
 
 async def _action_arm_pose_delete(params: dict) -> dict:
@@ -144,6 +151,17 @@ async def _action_arm_pose_execute(params: dict) -> dict:
     from src.robot_agent.tools.builtin.arm_tools import move_both_arms
     state = await _build_state()
     result = await move_both_arms(state, left_positions=pose["left"], right_positions=pose["right"])
+    if result.get("ok", False):
+        from src.robot_agent.tools.builtin.arm_tools import control_both_hands
+        hand_result = await control_both_hands(
+            state,
+            left_gesture="custom",
+            right_gesture="custom",
+            left_angles=pose.get("left_hand", [0.0] * 6),
+            right_angles=pose.get("right_hand", [0.0] * 6),
+        )
+        if not hand_result.get("ok", False):
+            return hand_result
     result["pose"] = pose
     return result
 

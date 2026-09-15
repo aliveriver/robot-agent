@@ -22,10 +22,24 @@ class ArmPoseStore:
                 return []
             return json.loads(self.path.read_text(encoding="utf-8"))
 
-    def save(self, name: str, left: list[float], right: list[float]) -> dict[str, Any]:
-        if not name.strip() or len(left) != 7 or len(right) != 7:
+    def save(
+        self,
+        name: str,
+        left: list[float],
+        right: list[float],
+        left_hand: list[float],
+        right_hand: list[float],
+    ) -> dict[str, Any]:
+        if not name.strip() or len(left) != 7 or len(right) != 7 or len(left_hand) != 6 or len(right_hand) != 6:
             raise ValueError("动作名称不能为空，且左右臂必须各有 7 个关节值")
-        pose = {"id": uuid.uuid4().hex, "name": name.strip()[:80], "left": left, "right": right}
+        pose = {
+            "id": uuid.uuid4().hex,
+            "name": name.strip()[:80],
+            "left": left,
+            "right": right,
+            "left_hand": left_hand,
+            "right_hand": right_hand,
+        }
         with self._lock:
             poses = self.list()
             poses.append(pose)
