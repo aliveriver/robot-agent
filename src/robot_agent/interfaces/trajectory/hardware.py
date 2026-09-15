@@ -37,6 +37,8 @@ class RosTrajectoryHardware:
         self._hands = {"left": [1.0] * 6, "right": [1.0] * 6}
         self._has_arm_frame = False
         self._has_hand_frame = {"left": False, "right": False}
+        self._arm_modes = {"left": "idle", "right": "idle"}
+        self._arm_lock_targets = {"left": {}, "right": {}}
         self._node = Node("robot_agent_trajectory")
         self._node.create_subscription(MotorStatusMsg, "/arm/status", self._on_arm, 10)
         self._node.create_subscription(JointState, "/inspire_hand/state/left_hand", lambda msg: self._on_hand("left", msg), 10)
@@ -48,6 +50,8 @@ class RosTrajectoryHardware:
         self._executor.add_node(self._node)
         self._spin_thread = threading.Thread(target=self._executor.spin, daemon=True, name="trajectory_ros_spin")
         self._spin_thread.start()
+        self._tension_thread = threading.Thread(target=self._tension_loop, daemon=True, name="arm_tension_loop")
+        self._tension_thread.start()
 
     def _on_arm(self, msg: Any) -> None:
         with self._lock:
@@ -98,22 +102,47 @@ class RosTrajectoryHardware:
         raise RuntimeError(f"机器人关节反馈未就绪：{', '.join(missing)}")
 
     def set_arm_tension(self, side: str, tight: bool) -> dict[str, Any]:
-        """在当前位置松弛或重新绷紧指定手臂。"""
+        """记录模式；后台以 10Hz 持续松弛或锁紧指定手臂。"""
         if side not in {"left", "right"}:
             raise ValueError("side 必须是 left 或 right")
         frame = self.snapshot()
         ids = LEFT_ARM_IDS if side == "left" else RIGHT_ARM_IDS
         positions = {str(motor_id): frame["arms"][str(motor_id)] for motor_id in ids}
-        self._publish_arm(
-            positions,
-            speed=1.0 if tight else 0.0,
-            current=None if tight else 0.0,
-            frame_id=f"{side}_arm_{'tight' if tight else 'relax'}",
-        )
+        with self._lock:
+            self._arm_lock_targets[side] = positions
+            self._arm_modes[side] = "tight" if tight else "relax"
         return {"ok": True, "side": side, "tight": tight}
+
+    def clear_arm_tension(self) -> None:
+        with self._lock:
+            self._arm_modes = {"left": "idle", "right": "idle"}
+
+    def _tension_loop(self) -> None:
+        while True:
+            with self._lock:
+                modes = dict(self._arm_modes)
+                targets = copy.deepcopy(self._arm_lock_targets)
+                current = {str(key): value for key, value in self._arms.items()}
+            for side, mode in modes.items():
+                if mode == "idle":
+                    continue
+                ids = LEFT_ARM_IDS if side == "left" else RIGHT_ARM_IDS
+                positions = (
+                    targets[side]
+                    if mode == "tight"
+                    else {str(motor_id): current[str(motor_id)] for motor_id in ids}
+                )
+                self._publish_arm(
+                    positions,
+                    speed=3.14 if mode == "tight" else 0.0,
+                    current=None if mode == "tight" else 0.0,
+                    frame_id=f"{side}_arm_{mode}",
+                )
+            time.sleep(0.1)
 
     def set_teach_mode(self) -> None:
         """发送零速度、零电流命令，使双臂进入可拖动录制状态。"""
+        self.clear_arm_tension()
         frame = self.snapshot()
         self._publish_arm(frame["arms"], speed=0.0, current=0.0, frame_id="teach_mode")
 
