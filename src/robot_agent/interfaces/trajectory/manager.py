@@ -46,6 +46,9 @@ class TrajectoryManager:
     def hold_fixed_pose(self, pose: dict[str, Any]) -> dict[str, Any]:
         return self._get_hardware().hold_fixed_pose(pose)
 
+    def release_both_hands(self) -> dict[str, Any]:
+        return self._get_hardware().release_both_hands()
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             elapsed = time.monotonic() - self._started_at if self._started_at else 0.0

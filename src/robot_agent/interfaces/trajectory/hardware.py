@@ -134,6 +134,15 @@ class RosTrajectoryHardware:
             }
         return {"ok": True, "message": "固定动作目标已下发并进入持续保持", "pose": pose}
 
+    def release_both_hands(self) -> dict[str, Any]:
+        """高优先级双手全松：覆盖固定动作的手指保持目标，但不改变手臂保持。"""
+        released = {"left": [1.0] * 6, "right": [1.0] * 6}
+        with self._lock:
+            self._held_hands = copy.deepcopy(released)
+        self._publish_hand_positions("left", released["left"])
+        self._publish_hand_positions("right", released["right"])
+        return {"ok": True, "message": "双手已全松并持续保持"}
+
     def _tension_loop(self) -> None:
         while True:
             with self._lock:
