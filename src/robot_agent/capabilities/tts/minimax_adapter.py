@@ -24,6 +24,8 @@ import shutil
 import ssl
 import subprocess
 import threading
+import wave
+from pathlib import Path
 from typing import Any
 
 from src.robot_agent.bootstrap.logging import get_logger
@@ -289,6 +291,116 @@ class MinimaxTTS(TTSBase):
             self._current_player.stop()
         logger.info("MinimaxTTS: stopped")
 
+    async def synthesize_to_wav(
+        self,
+        text: str,
+        path: str | Path,
+        lang: str = "cn",
+        interrupt_event: threading.Event | None = None,
+    ) -> int:
+        """Generate a complete 32 kHz mono WAV without playing it."""
+        clean_text = text.strip()
+        if not clean_text:
+            raise ValueError("文字内容不能为空")
+        if not self._api_key:
+            raise RuntimeError("MinimaxTTS 缺少 TTS_API_KEY 配置")
+
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = target.with_suffix(target.suffix + ".part")
+        self._current_interrupt = interrupt_event or threading.Event()
+        last_error: Exception | None = None
+        pcm = b""
+        for attempt in range(2):
+            try:
+                pcm = await self._synthesize_pcm(clean_text, lang, self._current_interrupt)
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                if attempt == 1 or self._current_interrupt.is_set():
+                    raise
+                logger.warning("MinimaxTTS: WAV synthesis retry", error=str(exc))
+                await asyncio.sleep(0.5)
+        if not pcm and last_error is not None:
+            raise last_error
+        if self._current_interrupt.is_set():
+            raise RuntimeError("语音生成已取消")
+        try:
+            with wave.open(str(temp_path), "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(32000)
+                output.writeframes(pcm)
+            temp_path.replace(target)
+        except Exception:
+            temp_path.unlink(missing_ok=True)
+            raise
+        return int((len(pcm) / 2) * 1000 / 32000)
+
+    async def _synthesize_pcm(
+        self, text: str, lang: str, interrupt_event: threading.Event
+    ) -> bytes:
+        """Collect Minimax streaming PCM into one byte buffer."""
+        try:
+            import websockets
+        except ImportError as exc:
+            raise RuntimeError("MinimaxTTS 缺少依赖 websockets") from exc
+
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        websocket = None
+        chunks: list[bytes] = []
+        try:
+            websocket = await websockets.connect(
+                self._ws_url,
+                additional_headers={"Authorization": self._format_auth_header()},
+                ssl=ssl_context,
+                ping_interval=None,
+            )
+            connected = json.loads(await websocket.recv())
+            if connected.get("event") != "connected_success":
+                raise RuntimeError(f"MinimaxTTS 握手失败: {connected}")
+            await websocket.send(json.dumps({
+                "event": "task_start",
+                "model": self._model,
+                "voice_setting": {
+                    "voice_id": self._resolve_voice(lang), "speed": self._speed,
+                    "vol": 1, "pitch": 0, "emotion": "neutral",
+                },
+                "audio_setting": {
+                    "sample_rate": 32000, "bitrate": 128000,
+                    "format": "pcm", "channel": 1,
+                },
+            }))
+            started = json.loads(await websocket.recv())
+            if started.get("event") != "task_started":
+                raise RuntimeError(f"MinimaxTTS 任务启动失败: {started}")
+            await websocket.send(json.dumps({"event": "task_continue", "text": text}))
+            while True:
+                if interrupt_event.is_set():
+                    raise RuntimeError("语音生成已取消")
+                try:
+                    response_raw = await asyncio.wait_for(websocket.recv(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+                response = json.loads(response_raw)
+                if response.get("event") == "task_failed":
+                    raise RuntimeError(f"MinimaxTTS 任务失败: {response}")
+                audio_hex = response.get("data", {}).get("audio")
+                if audio_hex:
+                    chunks.append(bytes.fromhex(audio_hex))
+                if response.get("is_final"):
+                    break
+            await self._finish_task(websocket)
+            return b"".join(chunks)
+        finally:
+            if websocket is not None:
+                try:
+                    await websocket.close()
+                except Exception:
+                    pass
+
     async def _stream_tts(
         self,
         text: str,
@@ -315,6 +427,7 @@ class MinimaxTTS(TTSBase):
                 self._ws_url,
                 additional_headers={"Authorization": self._format_auth_header()},
                 ssl=ssl_context,
+                ping_interval=None,
             )
 
             connected = json.loads(await websocket.recv())
