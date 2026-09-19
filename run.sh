@@ -44,3 +44,4 @@ fi
 echo "[run.sh] conda env: agent"
 
 exec python -m src.robot_agent.app "$@"
+# sudo nmcli connection up "vivo S15"

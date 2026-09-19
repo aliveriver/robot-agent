@@ -1,5 +1,4 @@
 robot-agent/
-data/tts_runtime/
 .env
 
 configs/app.yaml
