@@ -1,5 +1,4 @@
 robot-agent/
-data/
 .env
 
 configs/app.yaml
