@@ -16,6 +16,8 @@ import asyncio
 import json
 import logging
 import time
+import uuid
+from pathlib import Path
 from typing import Any, Set
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -181,13 +183,113 @@ async def _action_list_gestures(_params: dict) -> dict:
 
 
 async def _action_say(params: dict) -> dict:
-    text = params.get("text", "")
+    text = params.get("text", "").strip()
     if not text:
         return {"ok": False, "error": "text is required"}
-    from src.robot_agent.capabilities.tts.minimax_adapter import MinimaxTTS
-    tts = MinimaxTTS()
-    await tts.speak(text)
-    return {"ok": True, "spoken": text}
+    if len(text) > 1000:
+        return {"ok": False, "error": "文字内容不能超过 1000 个字符"}
+    from src.robot_agent.capabilities.tts.minimax_adapter import get_tts
+    from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+    controller = get_playback_controller()
+    controller.stop()
+    runtime_session.clear_tts_interrupt()
+    runtime_dir = Path.cwd() / "data" / "tts_runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    path = runtime_dir / f"{uuid.uuid4()}.wav"
+    synthesis = asyncio.create_task(get_tts().synthesize_to_wav(
+        text, path, interrupt_event=runtime_session.tts_interrupt_event
+    ))
+    done, _pending = await asyncio.wait({synthesis}, timeout=175)
+    if not done:
+        synthesis.cancel()
+        await asyncio.gather(synthesis, return_exceptions=True)
+        path.unlink(missing_ok=True)
+        raise RuntimeError("语音生成超过 175 秒，请重试")
+    await synthesis
+    status = await asyncio.to_thread(
+        controller.play, path, "say", None, True
+    )
+    return {"ok": True, **status}
+
+
+async def _action_speech_stop(_params: dict) -> dict:
+    """Interrupt the currently running robot TTS playback."""
+    runtime_session.request_tts_interrupt()
+    from src.robot_agent.capabilities.tts.minimax_adapter import get_tts
+    try:
+        await get_tts().stop()
+    except Exception as exc:
+        logger.warning("speech stop failed", error=str(exc))
+        return {"ok": False, "error": str(exc)}
+    from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+    status = await asyncio.to_thread(get_playback_controller().stop)
+    return {"ok": True, **status}
+
+
+async def _action_speech_status(_params: dict) -> dict:
+    from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+    return get_playback_controller().status()
+
+
+async def _action_speech_pause(_params: dict) -> dict:
+    from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+    return get_playback_controller().pause()
+
+
+async def _action_speech_resume(_params: dict) -> dict:
+    from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+    return get_playback_controller().resume()
+
+
+async def _action_tts_audio_generate(params: dict) -> dict:
+    from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+    from src.robot_agent.interfaces.audio.preset_audio import get_preset_audio_store
+    get_playback_controller().stop()
+    runtime_session.clear_tts_interrupt()
+    synthesis = asyncio.create_task(get_preset_audio_store().generate(
+        params.get("name", ""), params.get("text", "")
+    ))
+    done, _pending = await asyncio.wait({synthesis}, timeout=175)
+    if not done:
+        synthesis.cancel()
+        await asyncio.gather(synthesis, return_exceptions=True)
+        raise RuntimeError("语音生成超过 175 秒，请重试")
+    audio = await synthesis
+    return {"ok": True, "audio": audio}
+
+
+async def _action_tts_audio_list(_params: dict) -> dict:
+    from src.robot_agent.interfaces.audio.preset_audio import get_preset_audio_store
+    return {"audios": get_preset_audio_store().list()}
+
+
+async def _action_tts_audio_play(params: dict) -> dict:
+    from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+    from src.robot_agent.interfaces.audio.preset_audio import get_preset_audio_store
+    try:
+        audio = get_preset_audio_store().get(params.get("audio_id", ""))
+    except KeyError:
+        return {"ok": False, "error": "预设语音不存在"}
+    runtime_session.request_tts_interrupt()
+    status = await asyncio.to_thread(
+        get_playback_controller().play,
+        audio["path"], "preset", audio["id"], False,
+    )
+    return {"ok": True, **status}
+
+
+async def _action_tts_audio_delete(params: dict) -> dict:
+    from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+    from src.robot_agent.interfaces.audio.preset_audio import get_preset_audio_store
+    audio_id = params.get("audio_id", "")
+    controller = get_playback_controller()
+    if controller.status().get("source_id") == audio_id:
+        await asyncio.to_thread(controller.stop)
+    try:
+        deleted = await asyncio.to_thread(get_preset_audio_store().delete, audio_id)
+    except KeyError:
+        return {"ok": False, "error": "预设语音不存在"}
+    return {"ok": True, **deleted}
 
 
 async def _action_wake(_params: dict) -> dict:
@@ -266,6 +368,14 @@ _ACTION_HANDLERS: dict[str, Any] = {
     "reset_arms": _action_reset_arms,
     "list_gestures": _action_list_gestures,
     "say": _action_say,
+    "speech_status": _action_speech_status,
+    "speech_pause": _action_speech_pause,
+    "speech_resume": _action_speech_resume,
+    "speech_stop": _action_speech_stop,
+    "tts_audio_generate": _action_tts_audio_generate,
+    "tts_audio_list": _action_tts_audio_list,
+    "tts_audio_play": _action_tts_audio_play,
+    "tts_audio_delete": _action_tts_audio_delete,
     "wake": _action_wake,
     "sleep": _action_sleep,
     "trajectory_status": _action_trajectory_status,
