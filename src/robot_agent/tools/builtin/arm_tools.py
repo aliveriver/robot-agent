@@ -326,6 +326,29 @@ async def control_both_hands(
     }
 
 
+async def move_both_arms(
+    state: AgentState,
+    left_positions: list[float],
+    right_positions: list[float],
+    **kwargs: Any,
+) -> dict:
+    """在同一条控制指令中同时下发左右臂的 14 个关节位置。"""
+    if len(left_positions) != 7 or len(right_positions) != 7:
+        return {"ok": False, "error": "左右臂必须各提供 7 个关节值"}
+
+    def _send() -> None:
+        pub = _get_arm_pub()
+        pub.send_position(
+            LEFT_ARM_IDS + RIGHT_ARM_IDS,
+            list(left_positions) + list(right_positions),
+            speed_rpm=10.0,
+            current_a=4.0,
+        )
+
+    await asyncio.to_thread(_send)
+    return {"ok": True, "message": "左右臂目标已同步下发"}
+
+
 async def reset_arms(
     state: AgentState,
     **kwargs: Any,

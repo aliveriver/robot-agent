@@ -1,0 +1,34 @@
+[run.sh] ROS2 humble sourced
+[run.sh] ros2ws sourced: /opt/PARTITIONS/A/ros2ws
+[run.sh] Starting robot-agent from /home/nvidia/robot-agent
+[run.sh] conda env: agent
+/home/nvidia/miniconda3/envs/agent/lib/python3.10/site-packages/langgraph/cache/base/__init__.py:8: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+  from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+[transformers] PyTorch was not found. Models won't be available and only tokenizers, configuration and file/data utilities can be used.
+[2m2026-09-19T06:35:00.176471Z[0m [[32m[1minfo     [0m] [1mrobot-agent: starting         [0m [[0m[1m[34m__main__[0m][0m [36menv[0m=[35mdevelopment[0m [36mlang[0m=[35mcn[0m
+[2m2026-09-19T06:35:00.176923Z[0m [[32m[1minfo     [0m] [1mrobot-agent: LangSmith tracing 已开启[0m [[0m[1m[34m__main__[0m][0m [36mendpoint[0m=[35mhttps://api.smith.langchain.com[0m [36mproject[0m=[35mx-lab[0m
+[2m2026-09-19T06:35:00.852068Z[0m [[32m[1minfo     [0m] [1mToolRegistry: builtins registered[0m [[0m[1m[34msrc.robot_agent.tools.registry[0m][0m [36mcount[0m=[35m12[0m
+[2m2026-09-19T06:35:00.862571Z[0m [[33m[1mwarning  [0m] [1mapp: set default source failed[0m [[0m[1m[34m__main__[0m][0m [36margs[0m=[35m['set-default-source', 'bluez_source.0C_9A_E6_F5_7B_14.handsfree_head_unit'][0m [36merror[0m=[35m'Failure: No such entity'[0m
+[2m2026-09-19T06:35:00.872303Z[0m [[32m[1minfo     [0m] [1mapp: set default sink ok      [0m [[0m[1m[34m__main__[0m][0m [36margs[0m=[35m['set-default-sink', 'alsa_output.usb-C-Media_Electronics_Inc._USB_Audio_Device-00.analog-stereo'][0m
+[2m2026-09-19T06:35:00.873296Z[0m [[32m[1minfo     [0m] [1maudio_device: resolved devices[0m [[0m[1m[34msrc.robot_agent.interfaces.audio.device_resolver[0m][0m [36minput_device[0m=[35m36[0m [36minput_label[0m=[35m'36: default [hostapi=ALSA, in=32, out=32]'[0m [36moutput_device[0m=[35m36[0m [36moutput_label[0m=[35m'36: default [hostapi=ALSA, in=32, out=32]'[0m
+[2m2026-09-19T06:35:00.896152Z[0m [[32m[1minfo     [0m] [1mcamera_node: started          [0m [[0m[1m[34msrc.robot_agent.bootstrap.camera_node[0m][0m [36mcwd[0m=[35m/home/nvidia/orbbec_camera_ros2[0m [36mpid[0m=[35m9838[0m [36mstartup_delay_sec[0m=[35m3.0[0m
+ws: FastAPI server started host='0.0.0.0' port=8765
+[2m2026-09-19T06:35:04.375559Z[0m [[32m[1minfo     [0m] [1mdiscovery: listening          [0m [[0m[1m[34msrc.robot_agent.interfaces.websocket.discovery[0m][0m [36mport[0m=[35m9999[0m
+onnxruntime cpuid_info warning: Unknown CPU vendor. cpuinfo_vendor value: 0
+[2m2026-09-19T06:35:08.647666Z[0m [[32m[1minfo     [0m] [1mSherpaRecognizer: initialized [0m [[0m[1m[34msrc.robot_agent.capabilities.asr.sherpa_adapter[0m][0m [36mmodel_path[0m=[35msherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/model.onnx[0m [36msample_rate[0m=[35m16000[0m [36mtokens_path[0m=[35msherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/tokens.txt[0m
+[2m2026-09-19T06:35:08.648713Z[0m [[32m[1minfo     [0m] [1mMinimaxTTS: speaking          [0m [[0m[1m[34msrc.robot_agent.capabilities.tts.minimax_adapter[0m][0m [36mapi_url[0m=[35mhttps://api.minimaxi.com/v1/t2a_v2[0m [36mlang[0m=[35mcn[0m [36mmodel[0m=[35mspeech-2.6-turbo[0m [36mtext[0m=[35m你好，我是天轶机器人[0m [36mvoice[0m=[35mfemale-shaonv[0m [36mws_url[0m=[35mwss://api.minimaxi.com/ws/v1/t2a_v2[0m
+[2m2026-09-19T06:35:08.661017Z[0m [[32m[1minfo     [0m] [1mMinimaxTTS: sounddevice output ready[0m [[0m[1m[34msrc.robot_agent.capabilities.tts.minimax_adapter[0m][0m [36moutput_device[0m=[35m36[0m [36moutput_label[0m=[35m'36: default [hostapi=ALSA, in=32, out=32]'[0m
+ws: client connected remote="Address(host='192.168.41.66', port=63872)"
+ws: client disconnected remote="Address(host='192.168.41.66', port=63872)"
+[2m2026-09-19T06:35:11.509371Z[0m [[32m[1minfo     [0m] [1mMinimaxTTS: synthesis complete[0m [[0m[1m[34msrc.robot_agent.capabilities.tts.minimax_adapter[0m][0m [36maudio_bytes[0m=[35m148608[0m [36mchunks[0m=[35m75[0m
+[2m2026-09-19T06:35:11.591469Z[0m [[32m[1minfo     [0m] [1mapp: welcome message played   [0m [[0m[1m[34m__main__[0m][0m
+[2m2026-09-19T06:35:11.593050Z[0m [[32m[1minfo     [0m] [1mMicrophoneListener: started   [0m [[0m[1m[34msrc.robot_agent.interfaces.audio.microphone[0m][0m [36mblocksize[0m=[35m1600[0m [36minput_device[0m=[35m[0m [36msample_rate[0m=[35m16000[0m [36mspeech_threshold[0m=[35m0.03[0m
+[2m2026-09-19T06:35:11.594026Z[0m [[32m[1minfo     [0m] [1mrobot-agent: microphone + VAD ready[0m [[0m[1m[34m__main__[0m][0m
+[2m2026-09-19T06:35:11.604656Z[0m [[32m[1minfo     [0m] [1maudio_device: resolved devices[0m [[0m[1m[34msrc.robot_agent.interfaces.audio.device_resolver[0m][0m [36minput_device[0m=[35m36[0m [36minput_label[0m=[35m'36: default [hostapi=ALSA, in=32, out=32]'[0m [36moutput_device[0m=[35mNone[0m [36moutput_label[0m=[35mNone[0m
+[2m2026-09-19T06:35:11.606151Z[0m [[32m[1minfo     [0m] [1mMicrophoneListener: input stream ready[0m [[0m[1m[34msrc.robot_agent.interfaces.audio.microphone[0m][0m [36minput_label[0m=[35m'36: default [hostapi=ALSA, in=32, out=32]'[0m [36mresolved_input_device[0m=[35m36[0m
+ws: client connected remote="Address(host='192.168.41.66', port=63790)"
+ws: client disconnected remote="Address(host='192.168.41.66', port=63790)"
+ws: client connected remote="Address(host='192.168.91.141', port=48608)"
+ws: client disconnected remote="Address(host='192.168.91.141', port=48608)"
+ws: client connected remote="Address(host='192.168.91.141', port=48724)"
+ws: client disconnected remote="Address(host='192.168.91.141', port=48724)"

@@ -237,6 +237,8 @@ async def main() -> None:
         def interrupt_tts(reason: str, text: str) -> None:
             """尽可能快地中断当前语音。"""
             runtime_session.request_tts_interrupt()
+            from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+            get_playback_controller().pause()
 
             cancelled_count = 0
             for future in list(pending_tasks):
