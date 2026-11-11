@@ -59,6 +59,8 @@ class TTSSettings(BaseSettings):
     model: str = Field(...)
     default_voice: str = Field(...)
     speed: float = Field(...)
+    sentence_delimiters: str = Field("。！？!?…\n")
+    min_chunk_size: int = Field(6)
 
     model_config = SettingsConfigDict(env_prefix="TTS_", **_ENV_CFG)
 

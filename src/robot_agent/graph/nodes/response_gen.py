@@ -7,6 +7,7 @@ nodes/response_gen.py - 响应生成节点
 
 from __future__ import annotations
 
+import re
 from base64 import b64decode
 from pathlib import Path
 from typing import Any
@@ -15,7 +16,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.capabilities.llm.chat_model import get_chat_model
+from src.robot_agent.capabilities.tts.minimax_adapter import get_tts
 from src.robot_agent.graph.state import AgentState
+from src.robot_agent.runtime import runtime_session
 
 logger = get_logger(__name__)
 
@@ -77,6 +80,12 @@ GENERIC_FALLBACK: dict[str, str] = {
     "cn": "抱歉，我刚刚没连上大模型，但我还在。你可以再说一遍。",
     "en": "Sorry, I could not reach the model just now, but I'm still here. Please say it again.",
 }
+
+def _get_tts_chunk_settings():
+    from src.robot_agent.settings import settings
+    delimiters = re.escape(settings.tts.sentence_delimiters)
+    pattern = re.compile(rf"(?<=[{delimiters}])")
+    return pattern, settings.tts.min_chunk_size
 
 
 def _has_successful_action_tool(state: AgentState) -> bool:
@@ -221,6 +230,79 @@ def _llm_failure_fallback(state: AgentState) -> str:
     return f"{base} {generic}"
 
 
+async def _stream_llm_speak(
+    messages: list[Any],
+    model: Any,
+    state: AgentState,
+) -> str:
+    """流式 LLM 生成 + 按句实时 TTS 播放，返回完整文本。"""
+    tts = get_tts()
+    interrupt_event = runtime_session.tts_interrupt_event
+    sentence_re, min_chunk = _get_tts_chunk_settings()
+    buffer = ""
+    full_text = ""
+    tts_active = True
+    spoken_started = False
+
+    async for chunk in model.astream(messages):
+        token = chunk.content if hasattr(chunk, "content") else str(chunk)
+        if not token:
+            continue
+        buffer += token
+        full_text += token
+
+        if not tts_active:
+            continue
+
+        parts = sentence_re.split(buffer)
+        if len(parts) <= 1:
+            continue
+
+        sentences_to_speak: list[str] = []
+        carry = ""
+        for segment in parts[:-1]:
+            carry += segment
+            if len(carry.strip()) >= min_chunk:
+                sentences_to_speak.append(carry)
+                carry = ""
+        buffer = carry + parts[-1]
+
+        for sentence in sentences_to_speak:
+            if interrupt_event.is_set():
+                logger.info("_stream_llm_speak: interrupted during streaming")
+                tts_active = False
+                break
+
+            if not spoken_started:
+                if not runtime_session.allow_tts_playback(state.interrupt_revision):
+                    logger.info("_stream_llm_speak: stale response, skip TTS")
+                    tts_active = False
+                    break
+                runtime_session.note_spoken_start(sentence)
+                spoken_started = True
+
+            await tts.speak(sentence, lang=state.language, interrupt_event=interrupt_event)
+
+            if interrupt_event.is_set():
+                logger.info("_stream_llm_speak: interrupted after TTS")
+                tts_active = False
+                break
+
+    if tts_active and buffer.strip():
+        if not spoken_started:
+            if not runtime_session.allow_tts_playback(state.interrupt_revision):
+                return full_text
+            runtime_session.note_spoken_start(buffer.strip())
+            spoken_started = True
+        if not interrupt_event.is_set():
+            await tts.speak(buffer.strip(), lang=state.language, interrupt_event=interrupt_event)
+
+    if spoken_started:
+        runtime_session.note_spoken_finish()
+
+    return full_text
+
+
 async def response_gen(state: AgentState) -> dict:
     """生成最终的一般响应文本。"""
     if state.response_text and state.response_text not in {"__SKIP__", "__STOP__", "__EXIT__"}:
@@ -250,8 +332,8 @@ async def response_gen(state: AgentState) -> dict:
     try:
         model = get_chat_model(multimodal=has_image)
         messages = _build_messages(state, system_prompt, user_message)
-        reply = await model.ainvoke(messages)
-        response_text = _extract_response_text(reply)
+        response_text = await _stream_llm_speak(messages, model, state)
+        response_text = response_text.strip()
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "response_gen: model generation failed, using fallback",

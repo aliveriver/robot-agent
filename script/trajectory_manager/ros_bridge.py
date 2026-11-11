@@ -1,0 +1,505 @@
+"""
+ros_bridge.py - ROS2 通信层
+
+基于 control.py 和 record.py 的工作模式实现。
+无 ROS2 环境时自动进入模拟模式。
+"""
+
+import math
+import time
+import threading
+from dataclasses import dataclass, field
+
+# ROS2 导入（容错）
+_ROS2_AVAILABLE = False
+_ROS2_IMPORT_ERROR = ""
+try:
+    import glob as _glob
+    import os as _os
+    import sys as _sys
+    _ROS2_WS = _os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
+    for _p in _glob.glob(f"{_ROS2_WS}/install/*/local/lib/python*/dist-packages"):
+        if _p not in _sys.path:
+            _sys.path.insert(0, _p)
+
+    import rclpy
+    from rclpy.node import Node
+    from bodyctrl_msgs.msg import MotorStatusMsg, CmdSetMotorPosition, SetMotorPosition
+    from sensor_msgs.msg import JointState
+    _ROS2_AVAILABLE = True
+    print("[ROS2] 所有依赖导入成功")
+except ImportError as e:
+    _ROS2_IMPORT_ERROR = str(e)
+    print(f"[ROS2] 导入失败: {e}")
+
+LEFT_ARM_IDS = [11, 12, 13, 14, 15, 16, 17]
+RIGHT_ARM_IDS = [21, 22, 23, 24, 25, 26, 27]
+ALL_ARM_IDS = LEFT_ARM_IDS + RIGHT_ARM_IDS
+
+JOINT_LABELS = [
+    "肩俯仰", "肩侧摆", "肩旋转", "肘弯曲", "腕旋转", "腕俯仰", "腕偏转"
+]
+
+# 来自 control.py — 每个关节的安全锁紧电流上限
+SAFE_LOCK_CURRENT = {
+    11: 6.0, 12: 5.0, 13: 4.0, 14: 4.0, 15: 2.0, 16: 2.0, 17: 2.0,
+    21: 6.0, 22: 5.0, 23: 4.0, 24: 4.0, 25: 2.0, 26: 2.0, 27: 2.0,
+}
+
+
+@dataclass
+class BodySnapshot:
+    left_arm: list = field(default_factory=lambda: [0.0] * 7)
+    right_arm: list = field(default_factory=lambda: [0.0] * 7)
+    left_hand: list = field(default_factory=lambda: [1.0] * 6)
+    right_hand: list = field(default_factory=lambda: [1.0] * 6)
+    timestamp: float = 0.0
+
+    def to_dict(self):
+        return {
+            "left_arm": [round(v, 4) for v in self.left_arm],
+            "right_arm": [round(v, 4) for v in self.right_arm],
+            "left_hand": [round(v, 3) for v in self.left_hand],
+            "right_hand": [round(v, 3) for v in self.right_hand],
+            "timestamp": self.timestamp,
+        }
+
+
+class SimBridge:
+    """模拟模式。"""
+
+    def __init__(self):
+        self.mode = "idle"
+        self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
+        self.current_config = {"big_joint": 2.0, "small_joint": 2.0}
+        self._hand_target = {"left": [1.0] * 6, "right": [1.0] * 6}
+        self._t0 = time.time()
+
+    def get_snapshot(self) -> BodySnapshot:
+        t = time.time() - self._t0
+        return BodySnapshot(
+            left_arm=[0.1 * math.sin(t + i) for i in range(7)],
+            right_arm=[0.1 * math.cos(t + i) for i in range(7)],
+            left_hand=self._hand_target["left"][:],
+            right_hand=self._hand_target["right"][:],
+            timestamp=time.time(),
+        )
+
+    def set_mode(self, mode: str):
+        self.mode = mode
+        for mid in ALL_ARM_IDS:
+            self.joint_modes[mid] = mode
+
+    def set_joint_mode(self, motor_ids: list, mode: str):
+        for mid in motor_ids:
+            if mid in self.joint_modes:
+                self.joint_modes[mid] = mode
+        active = set(self.joint_modes.values())
+        self.mode = active.pop() if len(active) == 1 else "mixed"
+
+    def set_current(self, motor_ids: list, current: float):
+        pass
+
+    def set_hand(self, side: str, angles: list):
+        if side in ("left", "both"):
+            self._hand_target["left"] = angles[:]
+        if side in ("right", "both"):
+            self._hand_target["right"] = angles[:]
+
+    def send_frame(self, snapshot: BodySnapshot, speed: float = 3.14, current: float = 2.0):
+        pass
+
+    def set_body(self, target: str, motor_id: int, delta: float):
+        pass
+
+    def set_body_pos(self, target: str, motor_id: int, pos: float):
+        pass
+
+    def set_body_preset(self, preset: str):
+        pass
+
+    def get_body_status(self):
+        return {
+            "leg": {"51": 0.0, "52": 0.0},
+            "waist": {"31": 0.0, "32": 0.0},
+            "leg_target": {"51": 0.0, "52": 0.0},
+            "waist_target": {"31": 0.0, "32": 0.0},
+        }
+
+    def destroy(self):
+        pass
+
+
+# ── ROS2 真实实现 ──────────────────────────────────────────────
+
+if _ROS2_AVAILABLE:
+    class _BridgeNode(Node):
+        """
+        ROS2 节点 — 仅负责订阅和发布，不使用 ROS2 timer。
+        控制循环由外部 Python 线程驱动。
+        """
+
+        def __init__(self):
+            super().__init__("trajectory_manager_node")
+
+            # 订阅状态
+            self.create_subscription(MotorStatusMsg, "/arm/status", self._arm_cb, 10)
+            self.create_subscription(JointState, "/inspire_hand/state/left_hand", self._lhand_cb, 10)
+            self.create_subscription(JointState, "/inspire_hand/state/right_hand", self._rhand_cb, 10)
+            self.create_subscription(MotorStatusMsg, "/leg/status", self._leg_cb, 10)
+            self.create_subscription(MotorStatusMsg, "/waist/status", self._waist_cb, 10)
+
+            # 发布命令
+            self.arm_cmd_pub = self.create_publisher(CmdSetMotorPosition, "/arm/cmd_pos", 10)
+            self.lhand_cmd_pub = self.create_publisher(JointState, "/inspire_hand/ctrl/left_hand", 10)
+            self.rhand_cmd_pub = self.create_publisher(JointState, "/inspire_hand/ctrl/right_hand", 10)
+            self.leg_cmd_pub = self.create_publisher(CmdSetMotorPosition, "/leg/cmd_pos", 10)
+            self.waist_cmd_pub = self.create_publisher(CmdSetMotorPosition, "/waist/cmd_pos", 10)
+
+            # 手臂状态
+            self.current_arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
+            self.current_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
+            self.locked_arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
+            self.target_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
+            self.hands_initialized = False
+            self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
+
+            # 腿部/腰部状态
+            self.leg_pos = {51: 0.0, 52: 0.0}
+            self.waist_pos = {31: 0.0, 32: 0.0}
+            self.leg_target = {51: 0.0, 52: 0.0}
+            self.waist_target = {31: 0.0, 32: 0.0}
+            self.body_initialized = False
+
+        def _arm_cb(self, msg):
+            for item in msg.status:
+                mid = int(item.name)
+                if mid in self.current_arm_pos:
+                    self.current_arm_pos[mid] = float(item.pos)
+
+        def _lhand_cb(self, msg):
+            if len(msg.position) >= 6:
+                self.current_hand_pos["left"] = list(msg.position[:6])
+
+        def _rhand_cb(self, msg):
+            if len(msg.position) >= 6:
+                self.current_hand_pos["right"] = list(msg.position[:6])
+
+        def _leg_cb(self, msg):
+            for item in msg.status:
+                mid = int(item.name)
+                if mid in self.leg_pos:
+                    self.leg_pos[mid] = float(item.pos)
+
+        def _waist_cb(self, msg):
+            for item in msg.status:
+                mid = int(item.name)
+                if mid in self.waist_pos:
+                    self.waist_pos[mid] = float(item.pos)
+
+
+class RosBridge:
+    """对外接口，包装 _BridgeNode + spin 线程 + 独立控制线程。"""
+
+    def __init__(self):
+        if not _ROS2_AVAILABLE:
+            raise RuntimeError("ROS2 不可用")
+
+        rclpy.init()
+        self._node = _BridgeNode()
+        self._running = True
+
+        # spin 线程：处理订阅回调
+        self._spin_thread = threading.Thread(
+            target=rclpy.spin, args=(self._node,), daemon=True
+        )
+        self._spin_thread.start()
+
+        # 独立控制线程：10Hz 发布命令（不依赖 ROS2 timer）
+        self._ctrl_thread = threading.Thread(
+            target=self._ctrl_loop, daemon=True
+        )
+        self._ctrl_thread.start()
+
+    def _ctrl_loop(self):
+        """独立 Python 线程，10Hz 发布控制命令。"""
+        while self._running:
+            try:
+                if rclpy.ok():
+                    self._ctrl_tick()
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+    def _ctrl_tick(self):
+        n = self._node
+
+        # 1. 手臂控制
+        has_active = any(m != "idle" for m in n.joint_modes.values())
+        if has_active:
+            arm_msg = CmdSetMotorPosition()
+            arm_msg.header.stamp = n.get_clock().now().to_msg()
+            arm_msg.header.frame_id = "control_mode"
+            arm_msg.cmds = []
+
+            for mid in ALL_ARM_IDS:
+                jmode = n.joint_modes[mid]
+                if jmode == "idle":
+                    continue
+                item = SetMotorPosition()
+                item.name = mid
+                if jmode == "limp":
+                    item.pos = n.current_arm_pos[mid]
+                    item.spd = 0.0
+                    item.cur = 0.0
+                elif jmode == "lock":
+                    item.pos = n.locked_arm_pos[mid]
+                    item.spd = 3.14
+                    item.cur = SAFE_LOCK_CURRENT.get(mid, 2.0)
+                arm_msg.cmds.append(item)
+
+            if arm_msg.cmds:
+                n.arm_cmd_pub.publish(arm_msg)
+
+        # 2. 手部始终高频下发
+        if n.hands_initialized:
+            for side, pub in [("left", n.lhand_cmd_pub), ("right", n.rhand_cmd_pub)]:
+                h_msg = JointState()
+                h_msg.header.stamp = n.get_clock().now().to_msg()
+                h_msg.name = ["1", "2", "3", "4", "5", "6"]
+                h_msg.position = n.target_hand_pos[side]
+                pub.publish(h_msg)
+
+    @property
+    def mode(self):
+        active = set(self._node.joint_modes.values())
+        return active.pop() if len(active) == 1 else "mixed"
+
+    @property
+    def joint_modes(self):
+        return self._node.joint_modes
+
+    @property
+    def current_config(self):
+        return {"big_joint": 6.0, "small_joint": 2.0}
+
+    def get_snapshot(self) -> BodySnapshot:
+        n = self._node
+        return BodySnapshot(
+            left_arm=[n.current_arm_pos[mid] for mid in LEFT_ARM_IDS],
+            right_arm=[n.current_arm_pos[mid] for mid in RIGHT_ARM_IDS],
+            left_hand=n.current_hand_pos["left"][:],
+            right_hand=n.current_hand_pos["right"][:],
+            timestamp=time.time(),
+        )
+
+    def set_mode(self, mode: str):
+        n = self._node
+        if mode == "limp" and not n.hands_initialized:
+            n.target_hand_pos["left"] = n.current_hand_pos["left"][:]
+            n.target_hand_pos["right"] = n.current_hand_pos["right"][:]
+            n.hands_initialized = True
+        if mode == "lock":
+            for mid in ALL_ARM_IDS:
+                n.locked_arm_pos[mid] = n.current_arm_pos[mid]
+        print(f"[ROS2] set_mode -> {mode}")
+        for mid in ALL_ARM_IDS:
+            n.joint_modes[mid] = mode
+
+    def set_joint_mode(self, motor_ids: list, mode: str):
+        n = self._node
+        if mode == "limp" and not n.hands_initialized:
+            n.target_hand_pos["left"] = n.current_hand_pos["left"][:]
+            n.target_hand_pos["right"] = n.current_hand_pos["right"][:]
+            n.hands_initialized = True
+        if mode == "lock":
+            for mid in motor_ids:
+                if mid in n.locked_arm_pos:
+                    n.locked_arm_pos[mid] = n.current_arm_pos[mid]
+        for mid in motor_ids:
+            if mid in n.joint_modes:
+                n.joint_modes[mid] = mode
+        print(f"[ROS2] set_joint_mode: ids={motor_ids} mode={mode}")
+
+    def set_current(self, motor_ids: list, current: float):
+        # 动态修改 SAFE_LOCK_CURRENT
+        for mid in motor_ids:
+            SAFE_LOCK_CURRENT[mid] = current
+        print(f"[ROS2] set_current: ids={motor_ids} cur={current}A")
+
+    def set_hand(self, side: str, angles: list):
+        n = self._node
+        if not n.hands_initialized:
+            n.target_hand_pos["left"] = n.current_hand_pos["left"][:]
+            n.target_hand_pos["right"] = n.current_hand_pos["right"][:]
+            n.hands_initialized = True
+        ratios = [max(0.0, min(1.0, v / 100.0 if v > 1.5 else v)) for v in angles]
+        if side in ("left", "both"):
+            n.target_hand_pos["left"] = ratios[:]
+        if side in ("right", "both"):
+            n.target_hand_pos["right"] = ratios[:]
+
+    def set_body(self, target: str, motor_id: int, delta: float):
+        """增量调节腿部/腰部位置。"""
+        n = self._node
+        if not n.body_initialized:
+            n.leg_target[51] = n.leg_pos[51]
+            n.leg_target[52] = n.leg_pos[52]
+            n.waist_target[31] = n.waist_pos[31]
+            n.waist_target[32] = n.waist_pos[32]
+            n.body_initialized = True
+
+        if target == "leg":
+            n.leg_target[motor_id] += delta
+            self._send_leg()
+        elif target == "waist":
+            n.waist_target[motor_id] += delta
+            self._send_waist()
+
+    def set_body_pos(self, target: str, motor_id: int, pos: float):
+        """绝对位置设置腿部/腰部。"""
+        n = self._node
+        if not n.body_initialized:
+            n.leg_target[51] = n.leg_pos[51]
+            n.leg_target[52] = n.leg_pos[52]
+            n.waist_target[31] = n.waist_pos[31]
+            n.waist_target[32] = n.waist_pos[32]
+            n.body_initialized = True
+
+        if target == "leg":
+            n.leg_target[motor_id] = pos
+            self._send_leg()
+        elif target == "waist":
+            n.waist_target[motor_id] = pos
+            self._send_waist()
+
+    def _send_leg(self):
+        n = self._node
+        msg = CmdSetMotorPosition()
+        msg.header.stamp = n.get_clock().now().to_msg()
+        msg.header.frame_id = "base_link"
+        msg.cmds = []
+        for mid in [51, 52]:
+            item = SetMotorPosition()
+            item.name = mid
+            item.pos = n.leg_target[mid]
+            item.spd = 0.1
+            item.cur = 60.0
+            msg.cmds.append(item)
+        n.leg_cmd_pub.publish(msg)
+
+    def _send_waist(self):
+        n = self._node
+        msg = CmdSetMotorPosition()
+        msg.header.stamp = n.get_clock().now().to_msg()
+        msg.header.frame_id = "base_link"
+        msg.cmds = []
+        for mid in [31, 32]:
+            item = SetMotorPosition()
+            item.name = mid
+            item.pos = n.waist_target[mid]
+            item.spd = 0.1
+            item.cur = 60.0
+            msg.cmds.append(item)
+        n.waist_cmd_pub.publish(msg)
+
+    def set_body_preset(self, preset: str):
+        """应用预设姿势（来自 tianyi_body_zin.py 的 z 键功能）。"""
+        presets = {
+            "stand": {"leg51": 0.0255, "leg52": 0.2980, "waist31": -0.000, "waist32": 0.0001},
+        }
+        if preset not in presets:
+            return
+        p = presets[preset]
+        n = self._node
+        if not n.body_initialized:
+            n.leg_target[51] = n.leg_pos[51]
+            n.leg_target[52] = n.leg_pos[52]
+            n.waist_target[31] = n.waist_pos[31]
+            n.waist_target[32] = n.waist_pos[32]
+            n.body_initialized = True
+        n.leg_target[51] = p["leg51"]
+        n.leg_target[52] = p["leg52"]
+        n.waist_target[31] = p["waist31"]
+        n.waist_target[32] = p["waist32"]
+        self._send_leg()
+        self._send_waist()
+
+    def get_body_status(self):
+        n = self._node
+        return {
+            "leg": {str(k): round(v, 4) for k, v in n.leg_pos.items()},
+            "waist": {str(k): round(v, 4) for k, v in n.waist_pos.items()},
+            "leg_target": {str(k): round(v, 4) for k, v in n.leg_target.items()},
+            "waist_target": {str(k): round(v, 4) for k, v in n.waist_target.items()},
+        }
+
+    def send_frame(self, snapshot: BodySnapshot, dt: float = 0.1,
+                   prev_snapshot: BodySnapshot = None, current: float = 2.0):
+        """回放时逐帧发送位置指令，根据帧间距自动计算电机速度。"""
+        n = self._node
+        arm_msg = CmdSetMotorPosition()
+        arm_msg.header.stamp = n.get_clock().now().to_msg()
+        arm_msg.header.frame_id = "trajectory_playback"
+        arm_msg.cmds = []
+
+        for i, mid in enumerate(LEFT_ARM_IDS):
+            item = SetMotorPosition()
+            item.name = mid
+            item.pos = snapshot.left_arm[i]
+            if prev_snapshot and dt > 0:
+                item.spd = max(3.14, abs(snapshot.left_arm[i] - prev_snapshot.left_arm[i]) / dt * 1.5)
+            else:
+                item.spd = 3.14
+            item.cur = SAFE_LOCK_CURRENT.get(mid, current)
+            arm_msg.cmds.append(item)
+
+        for i, mid in enumerate(RIGHT_ARM_IDS):
+            item = SetMotorPosition()
+            item.name = mid
+            item.pos = snapshot.right_arm[i]
+            if prev_snapshot and dt > 0:
+                item.spd = max(3.14, abs(snapshot.right_arm[i] - prev_snapshot.right_arm[i]) / dt * 1.5)
+            else:
+                item.spd = 3.14
+            item.cur = SAFE_LOCK_CURRENT.get(mid, current)
+            arm_msg.cmds.append(item)
+
+        n.arm_cmd_pub.publish(arm_msg)
+
+        for side, pub, hand_data in [
+            ("left", n.lhand_cmd_pub, snapshot.left_hand),
+            ("right", n.rhand_cmd_pub, snapshot.right_hand),
+        ]:
+            h_msg = JointState()
+            h_msg.header.stamp = n.get_clock().now().to_msg()
+            h_msg.name = ["1", "2", "3", "4", "5", "6"]
+            h_msg.position = hand_data
+            pub.publish(h_msg)
+
+    def destroy(self):
+        self._running = False
+        try:
+            self._node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
+
+
+def create_bridge():
+    """工厂函数：有 ROS2 用真实桥接，否则用模拟。"""
+    if _ROS2_AVAILABLE:
+        try:
+            bridge = RosBridge()
+            print("[ROS2] RosBridge 初始化成功，使用真实模式")
+            return bridge
+        except Exception as e:
+            print(f"[WARN] ROS2 初始化失败，回退到模拟模式: {e}")
+            return SimBridge()
+    else:
+        print(f"[INFO] ROS2 不可用（{_ROS2_IMPORT_ERROR}），使用模拟模式")
+        return SimBridge()
