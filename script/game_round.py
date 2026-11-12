@@ -1,4 +1,4 @@
-"""猜拳时序：准备、轨迹内播放本地口令、出拳、保持并判定、倒序收回。
+"""猜拳时序：保存开局姿态、准备、回放/口令、出拳、判定、缓慢回位。
 
 run_game_round() 复用轨迹播放器和 AudioPlaybackController；GameTiming.from_env()
 读取停顿和音频时序，CountdownAudio 根据音频实际长度安排开始时机。
@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from script.game_trajectory import replay_game_trajectory
+from script.game_return import return_to_initial_pose
 
 
 @dataclass(frozen=True)
@@ -139,8 +140,10 @@ def judge_while_holding(node, judge_result, robot_gesture: str) -> dict:
 
 def run_game_round(node, *, gestures: dict, judge_result, db_path: Path,
                    trajectory_id: int, root: Path) -> dict:
-    """轨迹只到出手位置；判断有结果后，复用同一轨迹倒序收回双臂。"""
+    """保存本局实测开局姿态；判定完成后直接缓慢回位。"""
     timing = GameTiming.from_env()
+    initial_pose = node.capture_arm_pose()
+    node.set_arm_mode('b', 'lock')
     configured_path = os.getenv("GAME_COUNTDOWN_AUDIO", "").strip()
     audio_path = Path(configured_path).expanduser() if configured_path else None
     if audio_path is not None and not audio_path.is_absolute():
@@ -168,10 +171,10 @@ def run_game_round(node, *, gestures: dict, judge_result, db_path: Path,
         labels = {"win": "你赢了", "lose": "机器人赢了", "draw": "平局", "unknown": "无法判定"}
         print(f"[LOG][GAME] 玩家: {judgment['player_gesture']}，结果: {labels[judgment['result']]}")
         if judgment['result'] in ('win', 'lose', 'draw'):
-            print("[LOG][GAME] 判定完成，沿原轨迹收回双臂。")
-            replay_game_trajectory(node, db_path, trajectory_id, reverse=True)
+            print("[LOG][GAME] 判定完成，收手并缓慢回到本局开局姿态。")
             node.set_hand_target('b', gestures['paper'])
             node.ctrl_cb()
+            return_to_initial_pose(node, initial_pose)
         else:
             print("[LOG][GAME] 尚未判定输赢，保持当前姿势，不自动收回。")
         return judgment

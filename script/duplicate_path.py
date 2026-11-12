@@ -7,6 +7,7 @@ import glob as _glob
 import os as _os
 import sys as _sys
 import json
+import math
 
 _ROS2_WS = _os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
 _injected = []
@@ -41,6 +42,7 @@ class PlaybackNode(Node):
         interval_sec=None,
         publish_hands=True,
         shutdown_on_complete=True,
+        speed=3.14,
     ):
         super().__init__('trajectory_playback_node')
         
@@ -56,6 +58,9 @@ class PlaybackNode(Node):
             raise ValueError("回放采样间隔必须大于零")
         self.publish_hands = publish_hands
         self.shutdown_on_complete = shutdown_on_complete
+        self.speed = float(speed)
+        if not math.isfinite(self.speed) or self.speed <= 0:
+            raise ValueError("关节速度上限必须为有限正数")
         self.finished = False
         self.last_arm_positions = {}
         
@@ -87,7 +92,7 @@ class PlaybackNode(Node):
             item = SetMotorPosition()
             item.name = int(mid_str)
             item.pos = float(pos)
-            item.spd = 3.14  # 速度限制，保持动作平稳
+            item.spd = self.speed
             item.cur = ARM_CURRENTS[item.name]
             arm_msg.cmds.append(item)
             

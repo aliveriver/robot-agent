@@ -121,21 +121,21 @@ class GamePlaybackTest(unittest.TestCase):
     def test_game_reuses_player_without_hand_conflict_or_global_shutdown(self):
         self._run_game_replay(fail=False)
 
+    def test_return_player_uses_lower_speed_limit(self):
+        player = self.player_module.PlaybackNode(self.frames, speed=0.35)
+        with redirect_stdout(io.StringIO()):
+            player.play_frame_cb()
+        message = player.arm_cmd_pub.publish.call_args.args[0]
+        self.assertEqual(message.cmds[0].spd, 0.35)
+
     def test_replay_failure_restores_modes_and_destroys_player(self):
         self._run_game_replay(fail=True)
 
-    def test_retraction_reuses_player_in_reverse_and_holds_start_pose(self):
-        original = self.frames[:]
-        self.frames = [
-            {**original[0], "arms": {"11": pos}} for pos in (0.2, 0.4, 0.8)
-        ]
-        self._run_game_replay(fail=False, reverse=True)
-        self.assertEqual([frame['arms']['11'] for frame in self.frames], [0.2, 0.4, 0.8])
-
-    def _run_game_replay(self, fail, reverse=False):
+    def _run_game_replay(self, fail):
         game = Mock()
         game.arm_mode = {"l": "lock", "r": "idle"}
         game.current_arm_pos = {}
+        game.locked_arm_pos = {}
         players = []
 
         def make_player(*args, **kwargs):
@@ -161,14 +161,15 @@ class GamePlaybackTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "publish failed"):
                     replay_game_trajectory(game, Path("unused.db"), 5, on_progress=progress)
             else:
-                replay_game_trajectory(game, Path("unused.db"), 5, on_progress=progress, reverse=reverse)
+                replay_game_trajectory(game, Path("unused.db"), 5, on_progress=progress)
 
         player = players[0]
         self.assertTrue(player.destroyed)
-        self.assertEqual(game.current_arm_pos, {} if fail else {11: 0.2})
+        self.assertEqual(game.current_arm_pos, {})
+        self.assertEqual(game.locked_arm_pos, {} if fail else {11: 0.2})
         self.assertEqual(player.period, 0.01)
         progress.assert_any_call(0.0, len(self.frames) * 0.01)
-        expected_frames = list(reversed(self.frames)) if reverse else self.frames
+        expected_frames = self.frames
         self.assertEqual(player.trajectory, expected_frames)
         if not fail:
             published = [call.args[0].cmds[0].pos for call in player.arm_cmd_pub.publish.call_args_list]

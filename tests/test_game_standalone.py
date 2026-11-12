@@ -15,7 +15,7 @@ import importlib.util
 import sys
 import types
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 original_import = builtins.__import__
 def reject_settings(name, *args, **kwargs):
@@ -50,6 +50,24 @@ import script.play_game as demo
 assert not hasattr(demo, "logger")
 from script.trajectory_manager.arm_currents import ARM_CURRENTS
 node = demo.ManipulatorControlNode()
+sys.modules["rclpy"].ok = lambda: True
+positions = {mid: 0.01 * mid for mid in ARM_CURRENTS}
+status = types.SimpleNamespace(status=[types.SimpleNamespace(name=mid, pos=pos)
+                                      for mid, pos in positions.items()])
+sys.modules["rclpy"].spin_once = Mock(side_effect=lambda *args, **kwargs: node.arm_status_cb(status))
+pose = node.capture_arm_pose()
+assert pose == positions
+node.current_arm_pos[11] = 2.0
+assert pose[11] == positions[11]  # 每局保存独立副本。
+sys.modules["rclpy"].spin_once = Mock()
+node.arm_feedback_at = {mid: 99.0 for mid in ARM_CURRENTS}
+with patch("script.play_game.time.monotonic", side_effect=[100, 100, 103]):
+    try:
+        node.capture_arm_pose()
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Stale feedback must not be used as initial pose")
 node.set_arm_mode("b", "lock")
 node.ctrl_cb()
 assert {item.name: item.cur for item in node.arm_cmd_pub.publish.call_args.args[0].cmds} == ARM_CURRENTS

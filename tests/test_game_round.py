@@ -12,19 +12,29 @@ from script.game_round import CountdownAudio, GameTiming, run_game_round, wait_w
 
 
 class GameRoundTest(unittest.TestCase):
+    def test_missing_initial_feedback_prevents_motion(self):
+        node = Mock()
+        node.capture_arm_pose.side_effect = RuntimeError("missing feedback")
+        with patch("script.game_round.replay_game_trajectory") as replay:
+            with self.assertRaisesRegex(RuntimeError, "missing feedback"):
+                run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=Mock(),
+                               db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
+        node.set_hand_target.assert_not_called()
+        node.set_arm_mode.assert_not_called()
+        replay.assert_not_called()
+
     def test_final_gesture_follows_trajectory_and_audio_then_observation_and_judgment(self):
         events = []
         node = Mock()
+        initial = {11: 0.5, 21: -0.2}
+        node.capture_arm_pose.side_effect = lambda: events.append("save_pose") or initial.copy()
         node.set_hand_target.side_effect = lambda side, values: events.append(("hand", values))
         gestures = {"rock": [1], "scissors": [2], "paper": [0]}
         countdown = Mock()
         countdown.finished.side_effect = [False, True]
         countdown.on_progress.side_effect = lambda elapsed, total: events.append("audio_during_motion")
 
-        def replay(*args, on_progress=None, reverse=False):
-            if reverse:
-                events.append("retract")
-                return
+        def replay(*args, on_progress=None):
             events.append("trajectory_begin")
             on_progress(15.08, 16.58)
             events.append("trajectory_end")
@@ -40,6 +50,7 @@ class GameRoundTest(unittest.TestCase):
                 patch("script.game_round.GameTiming.from_env", return_value=GameTiming(reveal_sec=0.2)), \
                 patch("script.game_round.CountdownAudio", return_value=countdown) as audio_factory, \
                 patch("script.game_round.replay_game_trajectory", side_effect=replay), \
+                patch("script.game_round.return_to_initial_pose", side_effect=lambda *args: events.append("return")) as restore, \
                 patch("script.game_round.wait_with_ros", side_effect=wait), \
                 patch("script.game_round.judge_while_holding", side_effect=lambda node, judge, action: judge(action)), \
                 patch("script.game_round.random.choice", return_value=("scissors", [2])), \
@@ -48,13 +59,14 @@ class GameRoundTest(unittest.TestCase):
                                     db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
 
         self.assertEqual(events, [
-            ("hand", [1]), ("wait", 3.0), "trajectory_begin", "audio_during_motion",
+            "save_pose", ("hand", [1]), ("wait", 3.0), "trajectory_begin", "audio_during_motion",
             "trajectory_end", ("wait", 0.01), ("wait", 0.2), ("hand", [2]),
-            ("wait", 2.0), ("judge", "scissors"), "retract", ("hand", [0]),
+            ("wait", 2.0), ("judge", "scissors"), ("hand", [0]), "return",
         ])
         self.assertEqual(result["result"], "draw")
         self.assertEqual(audio_factory.call_args.args[0], Path("repo/data/countdown.wav"))
         countdown.stop.assert_called_once()
+        restore.assert_called_once_with(node, initial)
 
     def test_replay_failure_cancels_audio_and_does_not_reveal_or_judge(self):
         node, judge, countdown = Mock(), Mock(), Mock()
@@ -106,6 +118,7 @@ class GameRoundTest(unittest.TestCase):
             if not finished.is_set():
                 # 无论观察等待早已结束，判定未完成时都不能收回或改变最终手势。
                 self.assertEqual(replay.call_count, 1)
+                restore.assert_not_called()
                 node.set_hand_target.assert_called_with('b', [1])
             node.ctrl_cb()
             control_ticks += 1
@@ -116,6 +129,7 @@ class GameRoundTest(unittest.TestCase):
         with patch("script.game_round.GameTiming.from_env", return_value=GameTiming()), \
                 patch("script.game_round.CountdownAudio", return_value=countdown), \
                 patch("script.game_round.replay_game_trajectory") as replay, \
+                patch("script.game_round.return_to_initial_pose") as restore, \
                 patch("script.game_round.wait_with_ros", side_effect=wait), \
                 patch("script.game_round.random.choice", return_value=("rock", [1])), \
                 redirect_stdout(StringIO()):
@@ -123,8 +137,8 @@ class GameRoundTest(unittest.TestCase):
                                     db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
         self.assertGreaterEqual(control_ticks, 3)
         self.assertEqual(result['result'], 'win')
-        self.assertEqual(replay.call_count, 2)
-        replay.assert_called_with(node, Path("track.db"), 5, reverse=True)
+        self.assertEqual(replay.call_count, 1)
+        restore.assert_called_once_with(node, node.capture_arm_pose.return_value)
         node.set_hand_target.assert_called_with('b', [0])
 
     def test_unknown_or_failed_judgment_keeps_pose_without_retracting(self):
@@ -136,6 +150,7 @@ class GameRoundTest(unittest.TestCase):
                         patch("script.game_round.CountdownAudio", return_value=countdown), \
                         patch("script.game_round.wait_with_ros"), \
                         patch("script.game_round.replay_game_trajectory") as replay, \
+                        patch("script.game_round.return_to_initial_pose") as restore, \
                         patch("script.game_round.random.choice", return_value=("rock", [1])), \
                         patch("script.game_round.judge_while_holding") as judge, \
                         redirect_stdout(StringIO()):
@@ -149,6 +164,7 @@ class GameRoundTest(unittest.TestCase):
                         run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=Mock(),
                                        db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
                 self.assertEqual(replay.call_count, 1)
+                restore.assert_not_called()
                 node.set_hand_target.assert_called_with('b', [1])
                 self.assertEqual(node.set_hand_target.call_count, 2)
                 countdown.stop.assert_called_once()

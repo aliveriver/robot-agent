@@ -8,6 +8,7 @@ import time
 import glob
 import asyncio
 import json
+import math
 import urllib.request
 from pathlib import Path
 import numpy as np
@@ -262,8 +263,29 @@ class ManipulatorControlNode(Node):
         self.locked_arm_pos = {mid: 0.0 for mid in LEFT_ARM_IDS + RIGHT_ARM_IDS}
         self.arm_mode = {'l': 'idle', 'r': 'idle'}
         self.target_hand_pos = {'left': [1.0]*6, 'right': [1.0]*6}
+        self.arm_feedback_at = {}
+        self.arm_status_sub = self.create_subscription(
+            MotorStatusMsg, '/arm/status', self.arm_status_cb, 10)
         
         self.ctrl_timer = self.create_timer(0.1, self.ctrl_cb)
+
+    def arm_status_cb(self, msg):
+        """缓存双臂实测角度及接收时间，目标位置单独保存在 locked_arm_pos。"""
+        now = time.monotonic()
+        for item in msg.status:
+            mid, pos = int(item.name), float(item.pos)
+            if mid in self.current_arm_pos and math.isfinite(pos):
+                self.current_arm_pos[mid] = pos
+                self.arm_feedback_at[mid] = now
+
+    def capture_arm_pose(self, timeout=2.0):
+        """等待全部关节的新反馈并复制姿态；反馈不完整时取消，避免保存默认零值。"""
+        started = time.monotonic()
+        while rclpy.ok() and time.monotonic() - started < timeout:
+            rclpy.spin_once(self, timeout_sec=0.01)
+            if all(self.arm_feedback_at.get(mid, -1) >= started for mid in self.current_arm_pos):
+                return self.current_arm_pos.copy()
+        raise RuntimeError("未收到完整双臂实时反馈，无法保存/恢复姿态，请检查 /arm/status")
 
     def set_hand_target(self, target_hand, values):
         ratios = [float(max(0.0, min(1.0, (v / 100.0) if v > 1.5 else v))) for v in values]
@@ -309,7 +331,7 @@ class ManipulatorControlNode(Node):
 # 4. 串行交互动作流
 # ==========================================
 def play_game_routine(node: ManipulatorControlNode):
-    """出手后保持末帧，等待视觉判定，再沿原轨迹倒序收回。"""
+    """保存开局姿态，出手后等待视觉判定，再直接缓慢回到开局姿态。"""
     from script.game_round import run_game_round
 
     try:
@@ -334,6 +356,12 @@ def main():
 
     rclpy.init()
     node = ManipulatorControlNode()
+    try:
+        node.capture_arm_pose()
+    except Exception:
+        node.destroy_node()
+        rclpy.shutdown()
+        raise
     node.set_arm_mode('b', 'lock')  # 默认锁紧双臂支撑体
 
     print("\n" + "★"*60)
