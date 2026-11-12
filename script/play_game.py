@@ -5,7 +5,6 @@
 import os
 import sys
 import time
-import random
 import glob
 import asyncio
 import json
@@ -319,47 +318,21 @@ class ManipulatorControlNode(Node):
 # 4. 串行交互动作流
 # ==========================================
 def play_game_routine(node: ManipulatorControlNode):
-    # print("\n[LOG][GAME] >>> ====== 猜拳游戏流正式触发 ======")
-    # logger.info("Game_Flow: Triggered")
-    
-    # print("[LOG][GAME] ⏳ 游戏响应：就绪停顿 3 秒...")
-    # time.sleep(3.0)
-    
-    # print("[LOG][GAME] 🔊 模拟广播音频: '石头、剪刀、布！'")
-    # logger.info("Game_Flow: Playing audio indicator")
-    # time.sleep(1.5) 
-    
-    action_name, action_values = random.choice(list(GESTURES.items()))
-    print(f"[LOG][GAME] 🤖 动作下发 -> 机器人选择出：【{action_name.upper()}】")
-    logger.info("Game_Flow: Robot action determined", gesture=action_name)
-    
-    node.set_hand_target('b', action_values)
-    
-    try:
-        from script.game_trajectory import replay_game_trajectory
+    """依次执行准备、同步回放/口令、最终出手和视觉判定。"""
+    from script.game_round import run_game_round
 
-        replay_game_trajectory(node, GAME_TRAJECTORY_DB, int(GAME_TRAJECTORY_ID))
+    try:
+        run_game_round(
+            node,
+            gestures=GESTURES,
+            judge_result=judge_game_result,
+            db_path=GAME_TRAJECTORY_DB,
+            trajectory_id=int(GAME_TRAJECTORY_ID),
+            root=_ROBOT_AGENT_ROOT,
+        )
     except Exception as exc:
-        logger.exception("Game_Flow: trajectory replay failed", error=str(exc))
-        print(f"[LOG][GAME] 轨迹回放失败，本局取消: {exc}")
-        node.set_hand_target('b', GESTURES['paper'])
-        node.ctrl_cb()
-        return
-    print("[LOG][GAME] ⏳ 保持出招姿态，等待玩家亮拳...")
-    deadline = time.monotonic() + 2.0
-    while time.monotonic() < deadline:
-        rclpy.spin_once(node, timeout_sec=0.01)
-    judgment = judge_game_result(action_name)
-    result_labels = {"win": "你赢了", "lose": "机器人赢了", "draw": "平局", "unknown": "无法判定"}
-    print(
-        f"[LOG][GAME] 视觉判定 -> 玩家: {judgment['player_gesture']}, "
-        f"结果: {result_labels[judgment['result']]}"
-    )
-    
-    print("[LOG][GAME] >>> 恢复默认状态 (Paper)，结束本次游戏。\n")
-    logger.info("Game_Flow: Resetting to default posture")
-    node.set_hand_target('b', GESTURES['paper'])
-    node.ctrl_cb()
+        logger.exception("Game_Flow: round failed", error=str(exc))
+        print(f"[LOG][GAME] 本局取消: {exc}")
 
 # ==========================================
 # 5. 主单线程串行循环 (含 VAD 原版平移)
@@ -374,7 +347,7 @@ def main():
     node.set_arm_mode('b', 'lock')  # 默认锁紧双臂支撑体
 
     print("\n" + "★"*60)
-    print(" 🎮 语音猜拳核心循环已开启 (纯串行无多线程)")
+    print(" 🎮 语音猜拳核心循环已开启")
     print(f" 🎯 关键字表: {trigger_keywords}")
     print(" 🎤 运行中... 请对着麦克风说话。")
     print("★"*60 + "\n")

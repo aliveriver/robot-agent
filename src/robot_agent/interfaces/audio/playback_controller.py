@@ -28,6 +28,8 @@ class AudioPlaybackController:
         self._current_frame = 0
         self._total_frames = 0
         self._sample_rate = 0
+        self._last_error: str | None = None
+        self._last_completed_session_id: str | None = None
 
     def play(self, path: str | Path, source_type: str, source_id: str | None = None,
              delete_on_finish: bool = False) -> dict[str, Any]:
@@ -53,6 +55,8 @@ class AudioPlaybackController:
             self._current_frame = 0
             self._total_frames = total_frames
             self._sample_rate = sample_rate
+            self._last_error = None
+            self._last_completed_session_id = None
             session_id = self._session_id
             self._thread = threading.Thread(target=self._run, args=(session_id,), daemon=True)
             self._thread.start()
@@ -93,15 +97,22 @@ class AudioPlaybackController:
                 "source_id": self._source_id,
                 "position_ms": position_ms,
                 "duration_ms": duration_ms,
+                "last_error": self._last_error,
+                "last_completed_session_id": self._last_completed_session_id,
             }
 
     def _run(self, session_id: str) -> None:
-        import sounddevice as sd
-        import soundfile as sf
-
+        """后台播放到设备缓冲排空，并保留成功或错误供同步流程查询。"""
         with self._lock:
+            if self._session_id != session_id:
+                return
             path = self._path
+            stop_event = self._stop_event
+        completed = False
         try:
+            import sounddevice as sd
+            import soundfile as sf
+
             if path is None:
                 return
             with sf.SoundFile(path) as audio, sd.OutputStream(
@@ -110,28 +121,36 @@ class AudioPlaybackController:
                 dtype="float32",
                 device=resolve_output_device(settings.audio.output_device),
             ) as stream:
-                while not self._stop_event.is_set():
+                while not stop_event.is_set():
                     with self._condition:
-                        while self._state == "paused" and not self._stop_event.is_set():
+                        while self._state == "paused" and not stop_event.is_set():
                             self._condition.wait(timeout=0.5)
-                        if self._stop_event.is_set() or self._session_id != session_id:
+                        if stop_event.is_set() or self._session_id != session_id:
                             return
                         frame = self._current_frame
                     audio.seek(frame)
                     chunk = audio.read(1024, dtype="float32", always_2d=True)
                     if len(chunk) == 0:
+                        completed = True
                         break
                     stream.write(chunk)
                     with self._lock:
                         if self._session_id == session_id:
                             self._current_frame += len(chunk)
+        except Exception as exc:
+            with self._lock:
+                if self._session_id == session_id:
+                    self._last_error = str(exc)
         finally:
-            self._finish(session_id, path)
+            self._finish(session_id, path, completed)
 
-    def _finish(self, session_id: str, path: Path | None) -> None:
+    def _finish(self, session_id: str, path: Path | None, completed: bool = False) -> None:
+        """只结束当前会话；旧播放线程退出时不会覆盖新会话状态。"""
         with self._condition:
             if self._session_id != session_id:
                 return
+            if completed and self._last_error is None:
+                self._last_completed_session_id = session_id
             should_delete = self._delete_on_finish
             self._clear_locked()
         if should_delete and path is not None:
