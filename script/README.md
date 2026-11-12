@@ -5,6 +5,35 @@ control可以调控机器人的动作
 tianyi_body_zin用来调控机器人高度
 teach暂时弃用
 
+## 独立录制猜拳轨迹
+
+在机器人已有 ROS2 驱动运行、已 source ROS2 环境的终端执行：
+
+```bash
+cd ~/robot-agent
+python -m script.record_game_trajectory --name game_first
+```
+
+回车开始后双臂进入松弛模式，可手动带着机器人完成整套猜拳手臂动作；
+再次回车停止并保存。脚本复用 `trajectory_manager.Recorder`、`RosBridge`，
+不需要完整 Agent、麦克风、相机或 TTS。默认采样周期 10 ms，
+可用 `--interval-ms 100` 改为 100 ms。每次录制名称应不同；省略 `--name`
+会自动生成含时间戳的名称，旧轨迹不覆盖。
+
+数据直接保存到 `script/trajectory_manager/data/trajectories.db`（不是 JSON 文件）。
+成功后打印数据库位置、轨迹 ID 和帧数，并且仅更新 `.env` 的
+`GAME_TRAJECTORY_ID`，保留原 API、音频等配置。之后运行：
+
+```bash
+python -m script.play_game
+```
+
+就会使用新录的 ID。回放入口和数据库路径已写在 `play_game.py` 的
+`GAME_TRAJECTORY_DB` / `GAME_TRAJECTORY_ID`，每次启动都会打印路径和选择。
+如需只保存、不切换猜拳配置，用 `--keep-selection`。
+`--simulate` 仅用于调试录制流程，生成的模拟轨迹不会自动选为猜拳轨迹。
+真实模式缺少 ROS2 或关节反馈会报错，不自动切换为模拟数据。
+
 ## 猜拳与轨迹回放
 
 从 `robot-agent` 目录运行 `python -m script.play_game`。

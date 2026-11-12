@@ -162,6 +162,8 @@ if _ROS2_AVAILABLE:
             self.locked_arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
             self.target_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
             self.hands_initialized = False
+            self.received_arm_ids = set()
+            self.received_hands = set()
             self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
 
             # 腿部/腰部状态
@@ -176,14 +178,17 @@ if _ROS2_AVAILABLE:
                 mid = int(item.name)
                 if mid in self.current_arm_pos:
                     self.current_arm_pos[mid] = float(item.pos)
+                    self.received_arm_ids.add(mid)
 
         def _lhand_cb(self, msg):
             if len(msg.position) >= 6:
                 self.current_hand_pos["left"] = list(msg.position[:6])
+                self.received_hands.add("left")
 
         def _rhand_cb(self, msg):
             if len(msg.position) >= 6:
                 self.current_hand_pos["right"] = list(msg.position[:6])
+                self.received_hands.add("right")
 
         def _leg_cb(self, msg):
             for item in msg.status:
@@ -292,6 +297,16 @@ class RosBridge:
             right_hand=n.current_hand_pos["right"][:],
             timestamp=time.time(),
         )
+
+    def wait_ready(self, timeout: float = 5.0):
+        """录制前确认双臂和双手已有反馈，防止把初始零值录为真实轨迹。"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if (set(ALL_ARM_IDS).issubset(self._node.received_arm_ids)
+                    and self._node.received_hands == {"left", "right"}):
+                return
+            time.sleep(0.05)
+        raise RuntimeError("未收到完整双臂/双手反馈，请确认 /arm/status 和 /inspire_hand/state/*")
 
     def set_mode(self, mode: str):
         n = self._node

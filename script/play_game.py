@@ -73,10 +73,12 @@ trigger_keywords = ["石头剪刀布", "猜拳", "玩游戏", "玩个游戏", "�
 GAME_VISION_API_URL = os.getenv("GAME_VISION_API_URL", "")
 GAME_VISION_API_KEY = os.getenv("GAME_VISION_API_KEY", "")
 GAME_VISION_MODEL = os.getenv("GAME_VISION_MODEL", "")
+# 录制与回放共用的数据库：record_game_trajectory.py 保存到此文件。
+# Linux 上相对本文件定位，不依赖运行目录；录制后 ID 自动写入 .env。
 GAME_TRAJECTORY_DB = (
     Path(__file__).resolve().parent / "trajectory_manager" / "data" / "trajectories.db"
 )
-GAME_TRAJECTORY_ID = os.getenv("GAME_TRAJECTORY_ID", "5")
+GAME_TRAJECTORY_ID = os.getenv("GAME_TRAJECTORY_ID", "5")  # 录制脚本会更新此配置
 
 # ==========================================
 # 2. Sherpa-ONNX (SenseVoice) 识别引擎
@@ -341,6 +343,7 @@ def main():
     print("\n" + "★"*60)
     print(" 🎮 语音猜拳核心循环已开启")
     print(f" 🎯 关键字表: {trigger_keywords}")
+    print(f" 轨迹数据库: {GAME_TRAJECTORY_DB}，回放 ID: {GAME_TRAJECTORY_ID}")
     print(" 🎤 运行中... 请对着麦克风说话。")
     print("★"*60 + "\n")
 
