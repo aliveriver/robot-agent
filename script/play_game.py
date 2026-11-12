@@ -69,6 +69,11 @@ trigger_keywords = ["石头剪刀布", "猜拳", "玩游戏", "玩个游戏", "�
 
 # OpenAI-compatible vision endpoint; configure these values in robot-agent/.env.
 GAME_VISION_API_URL = os.getenv("GAME_VISION_API_URL", "")
+# 兼容已经从旧示例复制的重复协议头，避免把 "https" 当成 DNS 主机名。
+if GAME_VISION_API_URL.startswith("https://https://"):
+    GAME_VISION_API_URL = GAME_VISION_API_URL.removeprefix("https://")
+elif GAME_VISION_API_URL.startswith("http://http://"):
+    GAME_VISION_API_URL = GAME_VISION_API_URL.removeprefix("http://")
 GAME_VISION_API_KEY = os.getenv("GAME_VISION_API_KEY", "")
 GAME_VISION_MODEL = os.getenv("GAME_VISION_MODEL", "")
 # 录制与回放共用的数据库：record_game_trajectory.py 保存到此文件。

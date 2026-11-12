@@ -12,6 +12,7 @@ class GameStandaloneTest(unittest.TestCase):
         code = '''
 import builtins
 import importlib.util
+import os
 import sys
 import types
 from pathlib import Path
@@ -46,8 +47,10 @@ sys.modules["bodyctrl_msgs.msg"] = types.SimpleNamespace(
     MotorStatusMsg=Mock, CmdSetMotorPosition=Mock, SetMotorPosition=Mock)
 sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(JointState=Mock)
 
+os.environ["GAME_VISION_API_URL"] = "https://https://api.example.test/v1/chat/completions"
 import script.play_game as demo
 assert not hasattr(demo, "logger")
+assert demo.GAME_VISION_API_URL == "https://api.example.test/v1/chat/completions"
 from script.trajectory_manager.arm_currents import ARM_CURRENTS
 node = demo.ManipulatorControlNode()
 sys.modules["rclpy"].ok = lambda: True
