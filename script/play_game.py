@@ -21,6 +21,7 @@ if str(_ROBOT_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROBOT_AGENT_ROOT))
 load_dotenv(_ROBOT_AGENT_ROOT / ".env")
 from script.trajectory_manager.arm_currents import ARM_CURRENTS
+from script.game_camera import GameCameraLauncher
 
 # ── ROS2 workspace Python 路径注入 ──────────
 _ROS2_WS = os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
@@ -292,6 +293,11 @@ class ManipulatorControlNode(Node):
         if target_hand in ['l', 'b']: self.target_hand_pos['left'] = ratios.copy()
         if target_hand in ['r', 'b']: self.target_hand_pos['right'] = ratios.copy()
 
+    @staticmethod
+    def _to_driver_hand_positions(logical_positions):
+        """逻辑手势为 0=张开、1=握紧；Inspire 驱动 position 方向相反。"""
+        return [1.0 - value for value in logical_positions]
+
     def set_arm_mode(self, side, mode):
         targets = ['l', 'r'] if side == 'b' else [side]
         for t in targets:
@@ -323,7 +329,7 @@ class ManipulatorControlNode(Node):
             h_msg = JointState()
             h_msg.header.stamp = self.get_clock().now().to_msg()
             h_msg.name = ['1', '2', '3', '4', '5', '6']
-            h_msg.position = self.target_hand_pos[hand_side]
+            h_msg.position = self._to_driver_hand_positions(self.target_hand_pos[hand_side])
             pub.publish(h_msg)
 
 
@@ -354,6 +360,8 @@ def main():
         print("[LOG][FATAL] ASR 引擎未能成功构建，程序终止。")
         sys.exit(1)
 
+    camera_launcher = GameCameraLauncher()
+    camera_launcher.start()
     rclpy.init()
     node = ManipulatorControlNode()
     try:
@@ -480,6 +488,7 @@ def main():
         stream.close()
         node.destroy_node()
         rclpy.shutdown()
+        camera_launcher.stop()
         print("[LOG][EXIT] 节点与底层音频资源已安全离线。")
 
 if __name__ == '__main__':

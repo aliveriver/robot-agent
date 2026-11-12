@@ -40,6 +40,9 @@ python -m script.play_game
 从 `robot-agent` 目录运行 `python -m script.play_game`。
 这是独立 Demo，无需启动完整 Agent，也不要求 `configs/app.yaml`；
 脚本直接打印状态，参数从 `.env` / 环境变量读取。
+启动时会按 `GAME_CAMERA_LAUNCH_COMMAND` 自动拉起 Orbbec Gemini 330 摄像头，
+默认工作目录为 `/home/nvidia/orbbec_camera_ros2`，退出时只停止本次启动的进程。
+如摄像头已由其他终端启动，可设置 `GAME_CAMERA_AUTO_START=false`。
 每次语音触发猜拳，
 会读取 `script/trajectory_manager/data/trajectories.db`，复用
 `duplicate_path.PlaybackNode` 回放双臂。每局只播放 `GAME_TRAJECTORY_ID` 指定的一条轨迹，

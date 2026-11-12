@@ -74,6 +74,12 @@ assert {item.name: item.cur for item in node.arm_cmd_pub.publish.call_args.args[
 node.set_arm_mode("b", "limp")
 node.ctrl_cb()
 assert all(item.cur == 0.0 for item in node.arm_cmd_pub.publish.call_args.args[0].cmds)
+node.set_hand_target("b", demo.GESTURES["rock"])
+node.ctrl_cb()
+assert node.lhand_cmd_pub.publish.call_args.args[0].position == [0.0, 0.0, 0.0, 0.0, 0.0, 0.5]
+node.set_hand_target("b", demo.GESTURES["paper"])
+node.ctrl_cb()
+assert node.lhand_cmd_pub.publish.call_args.args[0].position == [1.0] * 6
 # 录制后锁臂和轨迹管理器回放同样使用共享配置，拖动时保持零电流。
 from script.trajectory_manager.ros_bridge import RosBridge, _BridgeNode, BodySnapshot
 bridge = RosBridge.__new__(RosBridge)
