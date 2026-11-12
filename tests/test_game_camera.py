@@ -45,6 +45,17 @@ class GameCameraTest(unittest.TestCase):
         popen.assert_not_called()
         self.assertFalse(launcher.started)
 
+    @patch.dict(os.environ, {"GAME_CAMERA_AUTO_START": "true"}, clear=False)
+    @patch("script.game_camera.subprocess.Popen")
+    def test_existing_camera_node_is_reused_without_second_launch(self, popen):
+        ros_node = Mock()
+        ros_node.get_node_names.return_value = ["play_game", "camera"]
+        launcher = GameCameraLauncher()
+        with patch.dict("sys.modules", {"rclpy": Mock(spin_once=Mock())}):
+            launcher.start(ros_node)
+        popen.assert_not_called()
+        self.assertFalse(launcher.started)
+
 
 if __name__ == "__main__":
     unittest.main()

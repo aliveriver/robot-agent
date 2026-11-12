@@ -365,12 +365,17 @@ def main():
         print("[LOG][FATAL] ASR 引擎未能成功构建，程序终止。")
         sys.exit(1)
 
-    camera_launcher = GameCameraLauncher()
-    camera_launcher.start()
     rclpy.init()
     node = ManipulatorControlNode()
     try:
         node.capture_arm_pose()
+    except Exception:
+        node.destroy_node()
+        rclpy.shutdown()
+        raise
+    camera_launcher = GameCameraLauncher()
+    try:
+        camera_launcher.start(node)
     except Exception:
         node.destroy_node()
         rclpy.shutdown()
