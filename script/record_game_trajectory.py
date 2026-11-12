@@ -1,6 +1,7 @@
 """独立录制猜拳轨迹：复用 Recorder/RosBridge，保存到轨迹管理器的 SQLite。
 
 运行 python -m script.record_game_trajectory；回车开始、回车停止并保存。
+只录制到出手位置；判断完毕后，游戏会沿此轨迹倒序收回。
 成功后更新 .env 的 GAME_TRAJECTORY_ID，供 play_game.py 直接回放。
 支持 --name、--interval-ms、--simulate（显式模拟调试）和 --keep-selection。
 """
@@ -88,6 +89,7 @@ async def run(args) -> None:
             await asyncio.to_thread(bridge.wait_ready)
         print(f"轨迹数据库：{DB_PATH.resolve()}")
         print(f"名称：{args.name}，采样周期：{args.interval_ms} ms")
+        print("只录到出手位置，不录收回动作；游戏判定完输赢后会倒序收回。")
         if args.simulate:
             print("模拟模式：不会采集真实机器人动作，也不会自动选为猜拳轨迹。")
         if await read_command("回车开始录制；输入 q 退出：") == "q":
@@ -104,7 +106,7 @@ async def run(args) -> None:
         recorder = Recorder(bridge, on_frame=report)
         trajectory_id = await record_session(
             recorder, bridge, args.name, args.interval_ms,
-            lambda: read_command("正在录制，可拖动双臂；回车停止并保存："),
+            lambda: read_command("正在录制，可拖动双臂；到出手位置后回车停止并保存："),
         )
         print(f"已保存：ID={trajectory_id}，名称={args.name}，帧数={len(recorder.frames)}")
         if not args.keep_selection and not args.simulate:

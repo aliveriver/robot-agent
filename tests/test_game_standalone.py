@@ -40,6 +40,18 @@ camera = get_camera_provider(topic="/test/image", timeout=2.0, save_dir="data/ca
                              local_device_index=0, prefer_ros=True)
 assert camera._topic == "/test/image"
 assert camera is get_camera_provider()
+# 视觉请求期间控制节点仍在 spin，相机必须使用自己的执行器。
+executor = Mock()
+executor.spin_once.side_effect = lambda **kwargs: camera._ros_stop_event.set()
+sys.modules["rclpy.executors"] = types.SimpleNamespace(
+    SingleThreadedExecutor=Mock(return_value=executor))
+sys.modules["rclpy"].spin_once = Mock(side_effect=AssertionError("Shared executor used"))
+camera._ros_node = object()
+camera._spin_ros_node()
+executor.add_node.assert_called_once_with(camera._ros_node)
+executor.spin_once.assert_called_once_with(timeout_sec=0.1)
+executor.shutdown.assert_called_once()
+sys.modules["rclpy"].spin_once.assert_not_called()
 from src.robot_agent.interfaces.audio.playback_controller import AudioPlaybackController
 player = AudioPlaybackController(output_device=None)
 assert player.status()["state"] == "idle"

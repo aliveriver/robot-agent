@@ -183,21 +183,25 @@ class RosCameraProvider(VisionBase):
             return self._ros_node
 
     def _spin_ros_node(self) -> None:
+        """相机使用独立执行器，允许猜拳主线程同时刷新手臂控制回调。"""
         try:
-            import rclpy
+            from rclpy.executors import SingleThreadedExecutor
         except ImportError:
             return
 
-        while not self._ros_stop_event.is_set():
-            node = self._ros_node
-            if node is None:
-                return
-
-            try:
-                rclpy.spin_once(node, timeout_sec=0.1)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("RosCameraProvider: ROS spin loop stopped", error=str(exc))
-                return
+        node = self._ros_node
+        if node is None:
+            return
+        executor = SingleThreadedExecutor()
+        try:
+            # 不共享 rclpy.spin_once() 的全局执行器，避免并发 spin 导致回调冲突。
+            executor.add_node(node)
+            while not self._ros_stop_event.is_set():
+                executor.spin_once(timeout_sec=0.1)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("RosCameraProvider: ROS spin loop stopped", error=str(exc))
+        finally:
+            executor.shutdown()
 
     def _capture_from_local_camera(self) -> str | None:
         try:

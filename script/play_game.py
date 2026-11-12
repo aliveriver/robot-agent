@@ -313,7 +313,7 @@ class ManipulatorControlNode(Node):
 # 4. 串行交互动作流
 # ==========================================
 def play_game_routine(node: ManipulatorControlNode):
-    """依次执行准备、同步回放/口令、最终出手和视觉判定。"""
+    """出手后保持末帧，等待视觉判定，再沿原轨迹倒序收回。"""
     from script.game_round import run_game_round
 
     try:

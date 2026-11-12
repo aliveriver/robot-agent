@@ -1,4 +1,4 @@
-"""猜拳时序：准备、轨迹内播放本地口令、最终出拳、等待亮拳、视觉判定。
+"""猜拳时序：准备、轨迹内播放本地口令、出拳、保持并判定、倒序收回。
 
 run_game_round() 复用轨迹播放器和 AudioPlaybackController；GameTiming.from_env()
 读取停顿和音频时序，CountdownAudio 根据音频实际长度安排开始时机。
@@ -10,6 +10,7 @@ import math
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -124,9 +125,21 @@ def wait_with_ros(node, seconds: float) -> None:
         rclpy.spin_once(node, timeout_sec=min(0.01, max(0.0, deadline - time.monotonic())))
 
 
+def judge_while_holding(node, judge_result, robot_gesture: str) -> dict:
+    """截图/API 在工作线程执行，主线程持续刷新 ROS，保持末帧和出拳手势。"""
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="game_judge")
+    try:
+        future = executor.submit(judge_result, robot_gesture)
+        while not future.done():
+            wait_with_ros(node, 0.01)
+        return future.result()
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def run_game_round(node, *, gestures: dict, judge_result, db_path: Path,
                    trajectory_id: int, root: Path) -> dict:
-    """先回放并喊口令，口令和轨迹都结束后才选择并发布最终手势。"""
+    """轨迹只到出手位置；判断有结果后，复用同一轨迹倒序收回双臂。"""
     timing = GameTiming.from_env()
     configured_path = os.getenv("GAME_COUNTDOWN_AUDIO", "").strip()
     audio_path = Path(configured_path).expanduser() if configured_path else None
@@ -150,11 +163,17 @@ def run_game_round(node, *, gestures: dict, judge_result, db_path: Path,
         node.ctrl_cb()
         print(f"[LOG][GAME] 最终出手: {action_name.upper()}，等待亮拳 {timing.observe_sec:.2f} 秒。")
         wait_with_ros(node, timing.observe_sec)
-        judgment = judge_result(action_name)
+        print("[LOG][GAME] 保持出拳姿势，等待视觉判定完成。")
+        judgment = judge_while_holding(node, judge_result, action_name)
         labels = {"win": "你赢了", "lose": "机器人赢了", "draw": "平局", "unknown": "无法判定"}
         print(f"[LOG][GAME] 玩家: {judgment['player_gesture']}，结果: {labels[judgment['result']]}")
+        if judgment['result'] in ('win', 'lose', 'draw'):
+            print("[LOG][GAME] 判定完成，沿原轨迹收回双臂。")
+            replay_game_trajectory(node, db_path, trajectory_id, reverse=True)
+            node.set_hand_target('b', gestures['paper'])
+            node.ctrl_cb()
+        else:
+            print("[LOG][GAME] 尚未判定输赢，保持当前姿势，不自动收回。")
         return judgment
     finally:
         countdown.stop()
-        node.set_hand_target('b', gestures['paper'])
-        node.ctrl_cb()

@@ -14,8 +14,9 @@ cd ~/robot-agent
 python -m script.record_game_trajectory --name game_first
 ```
 
-回车开始后双臂进入松弛模式，可手动带着机器人完成整套猜拳手臂动作；
-再次回车停止并保存。脚本复用 `trajectory_manager.Recorder`、`RosBridge`，
+回车开始后双臂进入松弛模式，可手动带着机器人完成猜拳手臂动作；
+只录到出手位置，再次回车停止并保存，不录收回动作。
+游戏判定完输赢后会沿同一轨迹倒序收回。脚本复用 `trajectory_manager.Recorder`、`RosBridge`，
 不需要完整 Agent、麦克风、相机或 TTS。默认采样周期 10 ms，
 可用 `--interval-ms 100` 改为 100 ms。每次录制名称应不同；省略 `--name`
 会自动生成含时间戳的名称，旧轨迹不覆盖。
@@ -43,7 +44,10 @@ python -m script.play_game
 会读取 `script/trajectory_manager/data/trajectories.db`，复用
 `duplicate_path.PlaybackNode` 回放双臂。流程为：准备停顿 → 轨迹回放，末段
 播放本地“石头、剪刀、布”口令 → 轨迹和口令均结束 → 随机出最终手势 →
-保持姿势并等待玩家亮拳 → 截图判定输赢 → 双手恢复张开。
+保持姿势并等待玩家亮拳 → 截图判定输赢 → 沿原轨迹倒序收回 → 双手恢复张开。
+出手后持续保持轨迹末帧和最终手势，截图/API 请求期间也持续刷新 ROS 控制。
+只有视觉返回胜、负或平局，才启动收回；请求失败或结果未知时保持姿势。
+收回由判定结果触发，没有定时收回。`GAME_RESULT_WAIT_SEC` 仅控制截图前的观察停顿。
 准备和轨迹回放时统一保持握拳，不提前显示最终随机手势；回放失败时取消本局。
 
 在 `.env` 填 `GAME_COUNTDOWN_AUDIO=data/audio/rock_paper_scissors.wav`，

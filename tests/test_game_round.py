@@ -1,6 +1,7 @@
 """验证本地口令在轨迹内播放，以及出手、观察、判定和复位的先后关系。"""
 
 import types
+import threading
 import unittest
 from contextlib import redirect_stdout
 from io import StringIO
@@ -20,7 +21,10 @@ class GameRoundTest(unittest.TestCase):
         countdown.finished.side_effect = [False, True]
         countdown.on_progress.side_effect = lambda elapsed, total: events.append("audio_during_motion")
 
-        def replay(*args, on_progress):
+        def replay(*args, on_progress=None, reverse=False):
+            if reverse:
+                events.append("retract")
+                return
             events.append("trajectory_begin")
             on_progress(15.08, 16.58)
             events.append("trajectory_end")
@@ -37,6 +41,7 @@ class GameRoundTest(unittest.TestCase):
                 patch("script.game_round.CountdownAudio", return_value=countdown) as audio_factory, \
                 patch("script.game_round.replay_game_trajectory", side_effect=replay), \
                 patch("script.game_round.wait_with_ros", side_effect=wait), \
+                patch("script.game_round.judge_while_holding", side_effect=lambda node, judge, action: judge(action)), \
                 patch("script.game_round.random.choice", return_value=("scissors", [2])), \
                 redirect_stdout(StringIO()):
             result = run_game_round(node, gestures=gestures, judge_result=judge,
@@ -45,7 +50,7 @@ class GameRoundTest(unittest.TestCase):
         self.assertEqual(events, [
             ("hand", [1]), ("wait", 3.0), "trajectory_begin", "audio_during_motion",
             "trajectory_end", ("wait", 0.01), ("wait", 0.2), ("hand", [2]),
-            ("wait", 2.0), ("judge", "scissors"), ("hand", [0]),
+            ("wait", 2.0), ("judge", "scissors"), "retract", ("hand", [0]),
         ])
         self.assertEqual(result["result"], "draw")
         self.assertEqual(audio_factory.call_args.args[0], Path("repo/data/countdown.wav"))
@@ -61,8 +66,7 @@ class GameRoundTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "motion failed"):
                 run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=judge,
                                db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
-        self.assertEqual(node.set_hand_target.call_count, 2)
-        node.set_hand_target.assert_called_with('b', [0])
+        node.set_hand_target.assert_called_once_with('b', [1])
         judge.assert_not_called()
         countdown.stop.assert_called_once()
 
@@ -79,7 +83,75 @@ class GameRoundTest(unittest.TestCase):
                                db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
         judge.assert_not_called()
         countdown.stop.assert_called_once()
+        node.set_hand_target.assert_called_once_with('b', [1])
+
+    def test_slow_judgment_keeps_control_running_and_only_then_retracts(self):
+        started, release, finished = threading.Event(), threading.Event(), threading.Event()
+        node, countdown = Mock(), Mock()
+        countdown.finished.return_value = True
+        control_ticks = 0
+
+        def judge(action):
+            started.set()
+            if not release.wait(2):
+                raise RuntimeError("test did not release judgment")
+            finished.set()
+            return {"result": "win", "player_gesture": "paper"}
+
+        def wait(node, seconds):
+            nonlocal control_ticks
+            if seconds != 0.01:
+                return
+            self.assertTrue(started.wait(2))
+            if not finished.is_set():
+                # 无论观察等待早已结束，判定未完成时都不能收回或改变最终手势。
+                self.assertEqual(replay.call_count, 1)
+                node.set_hand_target.assert_called_with('b', [1])
+            node.ctrl_cb()
+            control_ticks += 1
+            if control_ticks >= 3:
+                release.set()
+                self.assertTrue(finished.wait(2))
+
+        with patch("script.game_round.GameTiming.from_env", return_value=GameTiming()), \
+                patch("script.game_round.CountdownAudio", return_value=countdown), \
+                patch("script.game_round.replay_game_trajectory") as replay, \
+                patch("script.game_round.wait_with_ros", side_effect=wait), \
+                patch("script.game_round.random.choice", return_value=("rock", [1])), \
+                redirect_stdout(StringIO()):
+            result = run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=judge,
+                                    db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
+        self.assertGreaterEqual(control_ticks, 3)
+        self.assertEqual(result['result'], 'win')
+        self.assertEqual(replay.call_count, 2)
+        replay.assert_called_with(node, Path("track.db"), 5, reverse=True)
         node.set_hand_target.assert_called_with('b', [0])
+
+    def test_unknown_or_failed_judgment_keeps_pose_without_retracting(self):
+        for outcome in ({"result": "unknown", "player_gesture": "unknown"}, RuntimeError("API failed")):
+            with self.subTest(outcome=outcome):
+                node, countdown = Mock(), Mock()
+                countdown.finished.return_value = True
+                with patch("script.game_round.GameTiming.from_env", return_value=GameTiming()), \
+                        patch("script.game_round.CountdownAudio", return_value=countdown), \
+                        patch("script.game_round.wait_with_ros"), \
+                        patch("script.game_round.replay_game_trajectory") as replay, \
+                        patch("script.game_round.random.choice", return_value=("rock", [1])), \
+                        patch("script.game_round.judge_while_holding") as judge, \
+                        redirect_stdout(StringIO()):
+                    if isinstance(outcome, Exception):
+                        judge.side_effect = outcome
+                        with self.assertRaisesRegex(RuntimeError, "API failed"):
+                            run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=Mock(),
+                                           db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
+                    else:
+                        judge.return_value = outcome
+                        run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=Mock(),
+                                       db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
+                self.assertEqual(replay.call_count, 1)
+                node.set_hand_target.assert_called_with('b', [1])
+                self.assertEqual(node.set_hand_target.call_count, 2)
+                countdown.stop.assert_called_once()
 
     def test_countdown_starts_once_near_end_using_actual_file_duration(self):
         controller = Mock()

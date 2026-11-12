@@ -2,6 +2,7 @@
 
 load_game_trajectory() 只读数据库并转换帧格式；replay_game_trajectory()
 同时驱动游戏和回放节点，保持猜拳手势，并在退出时接续最后的手臂目标。
+reverse=True 时沿同一轨迹倒序收回，不另写一套控制逻辑。
 """
 
 from __future__ import annotations
@@ -54,12 +55,15 @@ def replay_game_trajectory(
     trajectory_id: int,
     *,
     on_progress: Callable[[float, float], None] | None = None,
+    reverse: bool = False,
 ) -> None:
-    """复用原播放器；进度回调接收已播、预计总时长（秒），可安排同步音频。"""
+    """复用原播放器正向出手或倒序收回；进度回调的时间单位为秒。"""
     import rclpy
     from script.duplicate_path import PlaybackNode
 
     frames, interval_sec, name = load_game_trajectory(db_path, trajectory_id)
+    if reverse:
+        frames = list(reversed(frames))
     previous_modes = node.arm_mode.copy()
     playback_node = PlaybackNode(
         frames,
@@ -71,7 +75,8 @@ def replay_game_trajectory(
         # 轨迹控制双臂期间暂停原锁臂命令，双手仍由游戏节点持续发布。
         node.set_arm_mode('b', 'idle')
         node.ctrl_cb()
-        print(f"[LOG][GAME] 回放轨迹 ID={trajectory_id}「{name}」 ({len(frames)} 帧)")
+        direction = "倒序收回" if reverse else "正向出手"
+        print(f"[LOG][GAME] {direction}轨迹 ID={trajectory_id}「{name}」 ({len(frames)} 帧)")
         while rclpy.ok() and not playback_node.finished:
             if on_progress is not None:
                 on_progress(playback_node.current_frame * interval_sec, len(frames) * interval_sec)
