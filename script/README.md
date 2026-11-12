@@ -9,8 +9,26 @@ teach暂时弃用
 
 从 `robot-agent` 目录运行 `python -m script.play_game`。每次语音触发猜拳，
 会读取 `script/trajectory_manager/data/trajectories.db`，复用
-`duplicate_path.PlaybackNode` 回放双臂；双手保持本局随机选中的猜拳姿势。
-回放完成后等待玩家亮拳，再截图判定输赢。回放失败时取消本局。
+`duplicate_path.PlaybackNode` 回放双臂。流程为：准备停顿 → 轨迹回放，末段
+播放本地“石头、剪刀、布”口令 → 轨迹和口令均结束 → 随机出最终手势 →
+保持姿势并等待玩家亮拳 → 截图判定输赢 → 双手恢复张开。
+准备和轨迹回放时统一保持握拳，不提前显示最终随机手势；回放失败时取消本局。
+
+在 `.env` 填 `GAME_COUNTDOWN_AUDIO=data/audio/rock_paper_scissors.wav`，
+也可使用绝对路径。音频由你预先生成，程序只复用现有 `AudioPlaybackController`
+异步播放，不调用 TTS。按文件实际时长从轨迹尾部倒推播放起点；若音频比轨迹长，
+从回放开始播放，并在轨迹结束后保持末帧，等音频播完才出手。
+当前默认轨迹约 16.58 秒，例如 1.5 秒音频约在回放第 15.08 秒开始。
+出手以实际音频播放结束为准，设备启动和调度会产生少量偏差。
+
+停顿仍保留，使用以下 `.env` 参数调整；等待期间继续刷新 ROS 控制：
+
+- `GAME_READY_DELAY_SEC=3.0`：回放前的准备停顿。
+- `GAME_REVEAL_DELAY_SEC=0.0`：轨迹和口令结束后，到出手的额外停顿。
+- `GAME_RESULT_WAIT_SEC=2.0`：最终出手后，到截图判定的观察停顿。
+- `GAME_AUDIO_LEAD_SEC=0.0`：音频启动提前量，用于补偿扬声器延迟。
+- `GAME_COUNTDOWN_DURATION_SEC=1.5`：音频路径留空时的口令模拟时长；
+  提供文件后自动采用文件真实时长。明确配置的文件缺失或播放失败会取消本局。
 
 将 `.env.example` 中的 `GAME_TRAJECTORY_ID` 复制到 `.env` 选择记录：
 默认 ID 5（`12314545`，1658 帧，采样周期 10 ms），也有 ID 6（`1243124`）

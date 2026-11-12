@@ -134,19 +134,21 @@ class GamePlaybackTest(unittest.TestCase):
 
         self.ros.spin_once = spin_once
         fake_module = types.SimpleNamespace(PlaybackNode=make_player)
+        progress = Mock()
         with patch.dict("sys.modules", {"script.duplicate_path": fake_module}), \
                 patch("script.game_trajectory.load_game_trajectory", return_value=(self.frames, 0.01, "test")), \
                 redirect_stdout(io.StringIO()):
             if fail:
                 with self.assertRaisesRegex(RuntimeError, "publish failed"):
-                    replay_game_trajectory(game, Path("unused.db"), 5)
+                    replay_game_trajectory(game, Path("unused.db"), 5, on_progress=progress)
             else:
-                replay_game_trajectory(game, Path("unused.db"), 5)
+                replay_game_trajectory(game, Path("unused.db"), 5, on_progress=progress)
 
         player = players[0]
         self.assertTrue(player.destroyed)
         self.assertEqual(game.current_arm_pos, {} if fail else {11: 0.2})
         self.assertEqual(player.period, 0.01)
+        progress.assert_any_call(0.0, 0.01)
         player.lhand_cmd_pub.publish.assert_not_called()
         player.rhand_cmd_pub.publish.assert_not_called()
         self.ros.shutdown.assert_not_called()

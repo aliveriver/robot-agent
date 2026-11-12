@@ -10,6 +10,7 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from typing import Callable
 
 
 def load_game_trajectory(db_path: Path, trajectory_id: int) -> tuple[list[dict], float, str]:
@@ -47,8 +48,14 @@ def load_game_trajectory(db_path: Path, trajectory_id: int) -> tuple[list[dict],
     return frames, interval_ms / 1000.0, name
 
 
-def replay_game_trajectory(node, db_path: Path, trajectory_id: int) -> None:
-    """复用原播放器，回放双臂时继续刷新游戏手势；失败向调用方抛错。"""
+def replay_game_trajectory(
+    node,
+    db_path: Path,
+    trajectory_id: int,
+    *,
+    on_progress: Callable[[float, float], None] | None = None,
+) -> None:
+    """复用原播放器；进度回调接收已播、预计总时长（秒），可安排同步音频。"""
     import rclpy
     from script.duplicate_path import PlaybackNode
 
@@ -66,6 +73,8 @@ def replay_game_trajectory(node, db_path: Path, trajectory_id: int) -> None:
         node.ctrl_cb()
         print(f"[LOG][GAME] 回放轨迹 ID={trajectory_id}「{name}」 ({len(frames)} 帧)")
         while rclpy.ok() and not playback_node.finished:
+            if on_progress is not None:
+                on_progress(playback_node.current_frame * interval_sec, len(frames) * interval_sec)
             rclpy.spin_once(node, timeout_sec=0.0)
             rclpy.spin_once(playback_node, timeout_sec=0.01)
         if not playback_node.finished:
