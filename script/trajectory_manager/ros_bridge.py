@@ -10,6 +10,8 @@ import time
 import threading
 from dataclasses import dataclass, field
 
+from .arm_currents import ARM_CURRENTS
+
 # ROS2 导入（容错）
 _ROS2_AVAILABLE = False
 _ROS2_IMPORT_ERROR = ""
@@ -40,11 +42,8 @@ JOINT_LABELS = [
     "肩俯仰", "肩侧摆", "肩旋转", "肘弯曲", "腕旋转", "腕俯仰", "腕偏转"
 ]
 
-# 来自 control.py — 每个关节的安全锁紧电流上限
-SAFE_LOCK_CURRENT = {
-    11: 6.0, 12: 5.0, 13: 4.0, 14: 4.0, 15: 2.0, 16: 2.0, 17: 2.0,
-    21: 6.0, 22: 5.0, 23: 4.0, 24: 4.0, 25: 2.0, 26: 2.0, 27: 2.0,
-}
+# 与猜拳和原轨迹播放器使用相同默认值；Web 手动调节仅作用于本桥接模块。
+SAFE_LOCK_CURRENT = ARM_CURRENTS.copy()
 
 
 @dataclass
@@ -71,7 +70,10 @@ class SimBridge:
     def __init__(self):
         self.mode = "idle"
         self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
-        self.current_config = {"big_joint": 2.0, "small_joint": 2.0}
+        self.current_config = {
+            "big_joint": max(ARM_CURRENTS[mid] for mid in (11, 12, 21, 22)),
+            "small_joint": max(ARM_CURRENTS[mid] for mid in (13, 14, 15, 16, 17, 23, 24, 25, 26, 27)),
+        }
         self._hand_target = {"left": [1.0] * 6, "right": [1.0] * 6}
         self._t0 = time.time()
 
@@ -286,7 +288,10 @@ class RosBridge:
 
     @property
     def current_config(self):
-        return {"big_joint": 6.0, "small_joint": 2.0}
+        return {
+            "big_joint": max(SAFE_LOCK_CURRENT[mid] for mid in (11, 12, 21, 22)),
+            "small_joint": max(SAFE_LOCK_CURRENT[mid] for mid in (13, 14, 15, 16, 17, 23, 24, 25, 26, 27)),
+        }
 
     def get_snapshot(self) -> BodySnapshot:
         n = self._node

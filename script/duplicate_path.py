@@ -23,6 +23,11 @@ from rclpy.node import Node
 from bodyctrl_msgs.msg import CmdSetMotorPosition, SetMotorPosition
 from sensor_msgs.msg import JointState
 
+if __package__:
+    from .trajectory_manager.arm_currents import ARM_CURRENTS
+else:
+    from trajectory_manager.arm_currents import ARM_CURRENTS
+
 # 读取的文件名称
 TRAJECTORY_FILE = "trajectory.json"
 record_timer = 0.1
@@ -72,7 +77,7 @@ class PlaybackNode(Node):
             
         frame = self.trajectory[self.current_frame]
         
-        # 1. 组装并下发双臂指令 (严格复用你写的位置环参数)
+        # 1. 组装并下发双臂指令，与猜拳保持姿势共用逐关节电流配置。
         arm_msg = CmdSetMotorPosition()
         arm_msg.header.stamp = self.get_clock().now().to_msg()
         arm_msg.header.frame_id = 'playback_mode'
@@ -83,7 +88,7 @@ class PlaybackNode(Node):
             item.name = int(mid_str)
             item.pos = float(pos)
             item.spd = 3.14  # 速度限制，保持动作平稳
-            item.cur = 2.0   # 安全电流上限
+            item.cur = ARM_CURRENTS[item.name]
             arm_msg.cmds.append(item)
             
         self.arm_cmd_pub.publish(arm_msg)

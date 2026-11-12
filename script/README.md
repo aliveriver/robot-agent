@@ -74,3 +74,17 @@ python -m script.play_game
 
 单独运行 `duplicate_path.py` 仍从启动目录的 `path/trajectory.json` 回放双臂和双手，
 默认周期为 0.1 秒。
+
+双臂电流集中配置在 `trajectory_manager/arm_currents.json`（单位 A），
+由 `play_game.py` 的姿势保持、`duplicate_path.PlaybackNode` 的正向/倒序回放，
+以及录制桥接的锁臂共用；修改后重启脚本生效。左右臂对应关节配置相同：
+
+| 关节 | 左/右电机 ID | 电流上限 |
+|------|-------------|----------|
+| 肩俯仰 | 11 / 21 | 8A |
+| 肩侧摆 | 12 / 22 | 7A |
+| 肩旋转 | 13 / 23 | 4A |
+| 肘关节 | 14 / 24 | 4A |
+| 腕旋转、俯仰、偏转 | 15–17 / 25–27 | 3A |
+
+拖动录制时的松弛模式仍发送 0A，停止后锁臂采用上表电流。

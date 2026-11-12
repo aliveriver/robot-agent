@@ -19,6 +19,7 @@ _ROBOT_AGENT_ROOT = Path(__file__).resolve().parents[1]
 if str(_ROBOT_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROBOT_AGENT_ROOT))
 load_dotenv(_ROBOT_AGENT_ROOT / ".env")
+from script.trajectory_manager.arm_currents import ARM_CURRENTS
 
 # ── ROS2 workspace Python 路径注入 ──────────
 _ROS2_WS = os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
@@ -49,11 +50,6 @@ GESTURES = {
 
 LEFT_ARM_IDS = [11, 12, 13, 14, 15, 16, 17]
 RIGHT_ARM_IDS = [21, 22, 23, 24, 25, 26, 27]
-
-SAFE_LOCK_CURRENT = {
-    11: 6.0, 12: 5.0, 13: 4.0, 14: 4.0, 15: 2.0, 16: 2.0, 17: 2.0,
-    21: 6.0, 22: 5.0, 23: 4.0, 24: 4.0, 25: 2.0, 26: 2.0, 27: 2.0,
-}
 
 class AudioConfig:
     sample_rate = 16000
@@ -296,7 +292,7 @@ class ManipulatorControlNode(Node):
                     if self.arm_mode[side] == 'limp':
                         item.pos, item.spd, item.cur = self.current_arm_pos[mid], 0.0, 0.0
                     elif self.arm_mode[side] == 'lock':
-                        item.pos, item.spd, item.cur = self.locked_arm_pos[mid], 3.14, SAFE_LOCK_CURRENT.get(mid, 2.0)
+                        item.pos, item.spd, item.cur = self.locked_arm_pos[mid], 3.14, ARM_CURRENTS[mid]
                     arm_msg.cmds.append(item)
         if arm_msg.cmds:
             self.arm_cmd_pub.publish(arm_msg)

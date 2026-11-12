@@ -28,13 +28,46 @@ for name in ("numpy", "sounddevice", "sherpa_onnx"):
     sys.modules[name] = types.ModuleType(name)
 sys.modules["dotenv"] = types.SimpleNamespace(load_dotenv=lambda *args: None)
 sys.modules["rclpy"] = types.ModuleType("rclpy")
-sys.modules["rclpy.node"] = types.SimpleNamespace(Node=object)
+
+class FakeNode:
+    def __init__(self, *args):
+        pass
+    def create_publisher(self, *args):
+        return Mock()
+    def create_subscription(self, *args):
+        return Mock()
+    def create_timer(self, *args):
+        return Mock()
+    def get_clock(self):
+        return Mock()
+
+sys.modules["rclpy.node"] = types.SimpleNamespace(Node=FakeNode)
 sys.modules["bodyctrl_msgs.msg"] = types.SimpleNamespace(
-    MotorStatusMsg=object, CmdSetMotorPosition=object, SetMotorPosition=object)
-sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(JointState=object)
+    MotorStatusMsg=Mock, CmdSetMotorPosition=Mock, SetMotorPosition=Mock)
+sys.modules["sensor_msgs.msg"] = types.SimpleNamespace(JointState=Mock)
 
 import script.play_game as demo
 assert not hasattr(demo, "logger")
+from script.trajectory_manager.arm_currents import ARM_CURRENTS
+node = demo.ManipulatorControlNode()
+node.set_arm_mode("b", "lock")
+node.ctrl_cb()
+assert {item.name: item.cur for item in node.arm_cmd_pub.publish.call_args.args[0].cmds} == ARM_CURRENTS
+node.set_arm_mode("b", "limp")
+node.ctrl_cb()
+assert all(item.cur == 0.0 for item in node.arm_cmd_pub.publish.call_args.args[0].cmds)
+# 录制后锁臂和轨迹管理器回放同样使用共享配置，拖动时保持零电流。
+from script.trajectory_manager.ros_bridge import RosBridge, _BridgeNode, BodySnapshot
+bridge = RosBridge.__new__(RosBridge)
+bridge._node = _BridgeNode()
+bridge.set_mode("lock")
+bridge._ctrl_tick()
+assert {item.name: item.cur for item in bridge._node.arm_cmd_pub.publish.call_args.args[0].cmds} == ARM_CURRENTS
+bridge.send_frame(BodySnapshot())
+assert {item.name: item.cur for item in bridge._node.arm_cmd_pub.publish.call_args.args[0].cmds} == ARM_CURRENTS
+bridge.set_mode("limp")
+bridge._ctrl_tick()
+assert all(item.cur == 0.0 for item in bridge._node.arm_cmd_pub.publish.call_args.args[0].cmds)
 from src.robot_agent.capabilities.vision.ros_camera import get_camera_provider
 camera = get_camera_provider(topic="/test/image", timeout=2.0, save_dir="data/camera",
                              local_device_index=0, prefer_ros=True)

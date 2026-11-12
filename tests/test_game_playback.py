@@ -107,6 +107,17 @@ class GamePlaybackTest(unittest.TestCase):
             pub.publish.assert_called_once()
         self.ros.shutdown.assert_called_once()
 
+    def test_playback_publishes_per_joint_current_for_both_arms(self):
+        expected = {11: 8.0, 12: 7.0, 13: 4.0, 14: 4.0, 15: 3.0, 16: 3.0, 17: 3.0,
+                    21: 8.0, 22: 7.0, 23: 4.0, 24: 4.0, 25: 3.0, 26: 3.0, 27: 3.0}
+        frame = {"arms": {str(mid): 0.1 for mid in expected},
+                 "lhand": [0.1] * 6, "rhand": [0.8] * 6}
+        player = self.player_module.PlaybackNode([frame])
+        with redirect_stdout(io.StringIO()):
+            player.play_frame_cb()
+        message = player.arm_cmd_pub.publish.call_args.args[0]
+        self.assertEqual({item.name: item.cur for item in message.cmds}, expected)
+
     def test_game_reuses_player_without_hand_conflict_or_global_shutdown(self):
         self._run_game_replay(fail=False)
 
