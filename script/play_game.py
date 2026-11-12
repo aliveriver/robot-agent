@@ -29,10 +29,7 @@ for _p in glob.glob(f"{_ROS2_WS}/install/*/local/lib/python*/dist-packages"):
 import re
 import rclpy
 from rclpy.node import Node
-from src.robot_agent.bootstrap.logging import get_logger
 
-# 初始化系统结构化日志
-logger = get_logger(__name__)
 
 try:
     from bodyctrl_msgs.msg import MotorStatusMsg, CmdSetMotorPosition, SetMotorPosition
@@ -89,7 +86,6 @@ recognizer = None
 def initSherpaOnnx():
     global recognizer
     print("\n[LOG][INIT] 正在加载 Sherpa-ONNX SenseVoice 模型...")
-    logger.info("ASR_Engine: Starting model initialization")
     try:
         model_dir = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
         model_path = os.path.join(model_dir, "model_quant.onnx")
@@ -100,7 +96,6 @@ def initSherpaOnnx():
              
         if not os.path.exists(model_path) or not os.path.exists(tokens_path):
             print(f"[LOG][ERROR] 模型文件未在 {model_dir} 中找到。")
-            logger.error("ASR_Engine: Initialization failed, files missing", model_dir=model_dir)
             return False
 
         recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
@@ -110,11 +105,9 @@ def initSherpaOnnx():
             debug=False,
         )
         print("[LOG][INIT] Sherpa-ONNX SenseVoice 模型加载成功")
-        logger.info("ASR_Engine: Initialization successful")
         return True
     except Exception as e:
         print(f"[LOG][ERROR] Sherpa-ONNX 模型加载失败: {e}")
-        logger.exception("ASR_Engine: Exception during init", error=str(e))
         return False
 def match_trigger_keywords(text: str) -> bool:
     """
@@ -166,7 +159,6 @@ def match_trigger_keywords(text: str) -> bool:
 def useASR_science_voice(audio_data):
     asr1 = time.time()
     print(f"\n[时间戳] ASR开始: {asr1}")
-    logger.info("ASR_Process: Inference started", timestamp=asr1, data_len=len(audio_data))
     raw_text = ""                 
     try:
         stream = recognizer.create_stream()
@@ -175,13 +167,11 @@ def useASR_science_voice(audio_data):
         raw_text = stream.result.text
     except Exception as e:
         print(f"[LOG][ERROR] ASR识别出错: {e}")
-        logger.error("ASR_Process: Decode exception", error=str(e))
     finally:
         # 移至 finally 块，确保无论成功或失败均能统计耗时与结束戳
         asr2 = time.time()
         print(f"[时间戳] ASR结束: {asr2}")
         print(f"[时间戳] ASR识别时长: {asr2 - asr1:.4f} 秒")
-        logger.info("ASR_Process: Inference completed", timestamp=asr2, duration=asr2-asr1, text=raw_text)
     return raw_text
 
 
@@ -194,7 +184,14 @@ def judge_game_result(robot_gesture: str) -> dict:
     try:
         from src.robot_agent.capabilities.vision.ros_camera import get_camera_provider
 
-        image_b64 = asyncio.run(get_camera_provider().capture_base64())
+        camera = get_camera_provider(
+            topic=os.getenv("VISION_CAMERA_TOPIC", "/camera/color/image_raw"),
+            timeout=float(os.getenv("VISION_CAPTURE_TIMEOUT", "2.0")),
+            save_dir=os.getenv("VISION_SAVE_DIR", str(_ROBOT_AGENT_ROOT / "data/camera")),
+            local_device_index=int(os.getenv("VISION_LOCAL_DEVICE_INDEX", "0")),
+            prefer_ros=os.getenv("VISION_PREFER_ROS", "true").lower() in ("true", "1", "yes"),
+        )
+        image_b64 = asyncio.run(camera.capture_base64())
         if not image_b64:
             raise RuntimeError("摄像头未能采集到画面")
 
@@ -250,7 +247,6 @@ def judge_game_result(robot_gesture: str) -> dict:
             result = "unknown"
         return {"result": result, "player_gesture": player_gesture}
     except Exception as exc:
-        logger.warning("Game_Flow: visual result judgment failed", error=str(exc))
         print(f"[LOG][GAME] 视觉判定失败，结果未知: {exc}")
         return {"result": "unknown", "player_gesture": "unknown"}
 
@@ -270,13 +266,11 @@ class ManipulatorControlNode(Node):
         self.target_hand_pos = {'left': [1.0]*6, 'right': [1.0]*6}
         
         self.ctrl_timer = self.create_timer(0.1, self.ctrl_cb)
-        logger.info("ROS2_Node: ManipulatorControlNode initialized")
 
     def set_hand_target(self, target_hand, values):
         ratios = [float(max(0.0, min(1.0, (v / 100.0) if v > 1.5 else v))) for v in values]
         if target_hand in ['l', 'b']: self.target_hand_pos['left'] = ratios.copy()
         if target_hand in ['r', 'b']: self.target_hand_pos['right'] = ratios.copy()
-        logger.debug("ROS2_Node: Target hand position updated", target=target_hand, ratios=ratios)
 
     def set_arm_mode(self, side, mode):
         targets = ['l', 'r'] if side == 'b' else [side]
@@ -285,7 +279,6 @@ class ManipulatorControlNode(Node):
                 ids = LEFT_ARM_IDS if t == 'l' else RIGHT_ARM_IDS
                 for mid in ids: self.locked_arm_pos[mid] = self.current_arm_pos[mid]
             self.arm_mode[t] = mode
-        logger.info("ROS2_Node: Arm mode altered", side=side, mode=mode)
 
     def ctrl_cb(self):
         arm_msg = CmdSetMotorPosition()
@@ -331,7 +324,6 @@ def play_game_routine(node: ManipulatorControlNode):
             root=_ROBOT_AGENT_ROOT,
         )
     except Exception as exc:
-        logger.exception("Game_Flow: round failed", error=str(exc))
         print(f"[LOG][GAME] 本局取消: {exc}")
 
 # ==========================================
@@ -351,7 +343,6 @@ def main():
     print(f" 🎯 关键字表: {trigger_keywords}")
     print(" 🎤 运行中... 请对着麦克风说话。")
     print("★"*60 + "\n")
-    logger.info("Main_Loop: Serial pipeline running")
 
     # 开启物理输入流
     stream = sd.InputStream(
@@ -398,7 +389,6 @@ def main():
                     _in_speech = True
                     _current_audio_frames = []
                     print(f"\n[LOG][VAD] 🎤 检测到人声起跑 (当前峰值: {peak:.4f})")
-                    logger.info("VAD_State: Speech segment started", peak_val=peak)
                 _current_audio_frames.append(audio_chunk)
                 _silence_started_at = None
             elif _in_speech:
@@ -432,11 +422,9 @@ def main():
 
             if duration < audio_cfg.min_segment_sec:
                 print(f"[LOG][VAD] ⚠️ 录音片段过短 ({duration:.2f}s)，判定为环境杂音，丢弃。")
-                logger.debug("VAD_State: Segment dropped (too short)", duration=duration)
                 continue
 
             print(f"[LOG][VAD] 🛑 语音流截断完成。有效语音长度: {duration:.2f}s, 切片总数: {len(frames)}")
-            logger.info("VAD_State: Segment flushed successfully", duration=duration)
 
             # 6. 串行阻塞业务执行：停止录音 -> ASR 推理 -> 逻辑匹配 -> 动作 -> 恢复
             stream.stop()

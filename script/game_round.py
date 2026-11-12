@@ -57,13 +57,13 @@ class CountdownAudio:
         self.deadline = 0.0
         if audio_path is not None:
             import soundfile as sf
-            from src.robot_agent.interfaces.audio.playback_controller import get_playback_controller
+            from src.robot_agent.interfaces.audio.playback_controller import AudioPlaybackController
 
             info = sf.info(audio_path)
             if info.frames <= 0 or info.samplerate <= 0:
                 raise ValueError(f"倒计时音频为空或采样率无效: {audio_path}")
             self.duration = info.frames / info.samplerate
-            self.controller = get_playback_controller()
+            self.controller = AudioPlaybackController(output_device=os.getenv("AUDIO_OUTPUT_DEVICE") or None)
 
     def on_progress(self, elapsed: float, total: float) -> None:
         """轨迹剩余长度足以容纳口令时开始播放，长音频从第一帧前开始。"""

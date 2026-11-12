@@ -7,7 +7,10 @@ teach暂时弃用
 
 ## 猜拳与轨迹回放
 
-从 `robot-agent` 目录运行 `python -m script.play_game`。每次语音触发猜拳，
+从 `robot-agent` 目录运行 `python -m script.play_game`。
+这是独立 Demo，无需启动完整 Agent，也不要求 `configs/app.yaml`；
+脚本直接打印状态，参数从 `.env` / 环境变量读取。
+每次语音触发猜拳，
 会读取 `script/trajectory_manager/data/trajectories.db`，复用
 `duplicate_path.PlaybackNode` 回放双臂。流程为：准备停顿 → 轨迹回放，末段
 播放本地“石头、剪刀、布”口令 → 轨迹和口令均结束 → 随机出最终手势 →

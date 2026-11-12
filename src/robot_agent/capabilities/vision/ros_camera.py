@@ -26,7 +26,6 @@ from pathlib import Path
 
 from src.robot_agent.bootstrap.logging import get_logger
 from src.robot_agent.capabilities.vision.base import VisionBase
-from src.robot_agent.settings import settings
 
 logger = get_logger(__name__)
 
@@ -42,14 +41,21 @@ class RosCameraProvider(VisionBase):
         local_device_index: int | None = None,
         prefer_ros: bool | None = None,
     ) -> None:
-        vision_cfg = settings.vision
-        self._topic = topic or vision_cfg.camera_topic
-        self._timeout = timeout or vision_cfg.capture_timeout
-        self._save_dir = Path(save_dir or vision_cfg.save_dir)
-        self._local_device_index = (
-            vision_cfg.local_device_index if local_device_index is None else local_device_index
-        )
-        self._prefer_ros = vision_cfg.prefer_ros if prefer_ros is None else prefer_ros
+        # 独立 Demo 显式传入采图参数时，不加载完整 Agent 配置。
+        if any(value is None for value in (topic, timeout, save_dir, local_device_index, prefer_ros)):
+            from src.robot_agent.settings import settings
+
+            vision_cfg = settings.vision
+            topic = vision_cfg.camera_topic if topic is None else topic
+            timeout = vision_cfg.capture_timeout if timeout is None else timeout
+            save_dir = vision_cfg.save_dir if save_dir is None else save_dir
+            local_device_index = vision_cfg.local_device_index if local_device_index is None else local_device_index
+            prefer_ros = vision_cfg.prefer_ros if prefer_ros is None else prefer_ros
+        self._topic = topic
+        self._timeout = timeout
+        self._save_dir = Path(save_dir)
+        self._local_device_index = local_device_index
+        self._prefer_ros = prefer_ros
         self._capture_lock = threading.Lock()
         self._ros_init_lock = threading.Lock()
         self._ros_initialized = False
@@ -247,8 +253,8 @@ _camera_instance: RosCameraProvider | None = None
 _camera_lock = threading.Lock()
 
 
-def get_camera_provider() -> RosCameraProvider:
-    """获取进程级单例相机实例。"""
+def get_camera_provider(**camera_options) -> RosCameraProvider:
+    """获取单例相机；首次调用可显式传入参数以独立于完整 Agent 配置。"""
     global _camera_instance
 
     if _camera_instance is not None:
@@ -256,5 +262,5 @@ def get_camera_provider() -> RosCameraProvider:
 
     with _camera_lock:
         if _camera_instance is None:
-            _camera_instance = RosCameraProvider()
+            _camera_instance = RosCameraProvider(**camera_options)
         return _camera_instance

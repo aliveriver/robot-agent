@@ -89,7 +89,7 @@ class GameRoundTest(unittest.TestCase):
             "soundfile": types.SimpleNamespace(info=Mock(return_value=types.SimpleNamespace(
                 frames=48000, samplerate=32000))),
             "src.robot_agent.interfaces.audio.playback_controller": types.SimpleNamespace(
-                get_playback_controller=lambda: controller),
+                AudioPlaybackController=lambda **kwargs: controller),
         }
         with patch.dict("sys.modules", modules), redirect_stdout(StringIO()):
             countdown = CountdownAudio(Path("countdown.wav"), GameTiming(countdown_sec=99))

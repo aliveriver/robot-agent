@@ -8,13 +8,16 @@ from pathlib import Path
 from typing import Any
 
 from src.robot_agent.interfaces.audio.device_resolver import resolve_output_device
-from src.robot_agent.settings import settings
+
+_USE_AGENT_OUTPUT = object()
 
 
 class AudioPlaybackController:
     """Play one local WAV at a time while retaining an exact frame position."""
 
-    def __init__(self) -> None:
+    def __init__(self, output_device=_USE_AGENT_OUTPUT) -> None:
+        # 独立 Demo 可以传设备或 None；默认构造仍延续 Agent 的配置行为。
+        self._output_device = output_device
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._stop_event = threading.Event()
@@ -115,11 +118,16 @@ class AudioPlaybackController:
 
             if path is None:
                 return
+            output_device = self._output_device
+            if output_device is _USE_AGENT_OUTPUT:
+                from src.robot_agent.settings import settings
+
+                output_device = settings.audio.output_device
             with sf.SoundFile(path) as audio, sd.OutputStream(
                 samplerate=audio.samplerate,
                 channels=audio.channels,
                 dtype="float32",
-                device=resolve_output_device(settings.audio.output_device),
+                device=resolve_output_device(output_device),
             ) as stream:
                 while not stop_event.is_set():
                     with self._condition:

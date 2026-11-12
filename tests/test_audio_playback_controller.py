@@ -39,6 +39,7 @@ class AudioPlaybackControllerTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("test_playback_controller", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        self.module = module
         self.controller = module.AudioPlaybackController()
 
     def _start(self):
@@ -70,6 +71,14 @@ class AudioPlaybackControllerTest(unittest.TestCase):
         self.controller._run(session)
         self.sd.OutputStream.assert_not_called()
         self.assertIsNone(self.controller.status()["last_completed_session_id"])
+
+    def test_explicit_device_plays_without_loading_agent_settings(self):
+        self.controller = self.module.AudioPlaybackController(output_device=None)
+        with patch.dict("sys.modules", {"src.robot_agent.settings": None}):
+            session = self._start()
+            self.controller._run(session)
+        self.assertEqual(self.controller.status()["last_completed_session_id"], session)
+        self.assertIsNone(self.controller.status()["last_error"])
 
 
 if __name__ == "__main__":
