@@ -1,14 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""语音触发猜拳，同时复用数据库轨迹回放，并通过视觉 API 判断结果。"""
 
 import os
 import sys
 import time
 import random
 import glob
+import asyncio
+import json
+import urllib.request
+from pathlib import Path
 import numpy as np
 import sounddevice as sd
 import sherpa_onnx
+from dotenv import load_dotenv
+
+_ROBOT_AGENT_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROBOT_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROBOT_AGENT_ROOT))
+load_dotenv(_ROBOT_AGENT_ROOT / ".env")
 
 # ── ROS2 workspace Python 路径注入 ──────────
 _ROS2_WS = os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
@@ -61,6 +72,15 @@ class AudioConfig:
 
 audio_cfg = AudioConfig()
 trigger_keywords = ["石头剪刀布", "猜拳", "玩游戏", "玩个游戏", "比划比划"]
+
+# OpenAI-compatible vision endpoint; configure these values in robot-agent/.env.
+GAME_VISION_API_URL = os.getenv("GAME_VISION_API_URL", "")
+GAME_VISION_API_KEY = os.getenv("GAME_VISION_API_KEY", "")
+GAME_VISION_MODEL = os.getenv("GAME_VISION_MODEL", "")
+GAME_TRAJECTORY_DB = (
+    Path(__file__).resolve().parent / "trajectory_manager" / "data" / "trajectories.db"
+)
+GAME_TRAJECTORY_ID = os.getenv("GAME_TRAJECTORY_ID", "5")
 
 # ==========================================
 # 2. Sherpa-ONNX (SenseVoice) 识别引擎
@@ -165,6 +185,76 @@ def useASR_science_voice(audio_data):
         logger.info("ASR_Process: Inference completed", timestamp=asr2, duration=asr2-asr1, text=raw_text)
     return raw_text
 
+
+def judge_game_result(robot_gesture: str) -> dict:
+    """Capture the revealed hands and ask an OpenAI-compatible vision model to judge the round."""
+    if not GAME_VISION_API_URL or not GAME_VISION_API_KEY or not GAME_VISION_MODEL:
+        print("[LOG][GAME] 视觉 API 尚未配置，胜负判定为未知。")
+        return {"result": "unknown", "player_gesture": "unknown"}
+
+    try:
+        from src.robot_agent.capabilities.vision.ros_camera import get_camera_provider
+
+        image_b64 = asyncio.run(get_camera_provider().capture_base64())
+        if not image_b64:
+            raise RuntimeError("摄像头未能采集到画面")
+
+        payload = {
+            "model": GAME_VISION_MODEL,
+            "temperature": 0,
+            "max_tokens": 120,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "这是一局石头剪刀布。图中机器人出的是"
+                                f"{robot_gesture}。识别画面中人类玩家出拳（rock、paper、scissors 或 unknown），"
+                                "并判断从人类玩家视角的结果（win、lose、draw 或 unknown）。"
+                                '只返回 JSON：{"player_gesture":"rock|paper|scissors|unknown",'
+                                '"result":"win|lose|draw|unknown"}。不要猜测看不清的手势。'
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                        },
+                    ],
+                }
+            ],
+        }
+        request = urllib.request.Request(
+            GAME_VISION_API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {GAME_VISION_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            api_response = json.loads(response.read().decode("utf-8"))
+        content = api_response["choices"][0]["message"]["content"]
+        if isinstance(content, list):
+            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.strip("`").removeprefix("json").strip()
+        judgment = json.loads(content)
+        player_gesture = judgment.get("player_gesture", "unknown").lower()
+        result = judgment.get("result", "unknown").lower()
+        if player_gesture not in {"rock", "paper", "scissors", "unknown"}:
+            player_gesture = "unknown"
+        if result not in {"win", "lose", "draw", "unknown"}:
+            result = "unknown"
+        return {"result": result, "player_gesture": player_gesture}
+    except Exception as exc:
+        logger.warning("Game_Flow: visual result judgment failed", error=str(exc))
+        print(f"[LOG][GAME] 视觉判定失败，结果未知: {exc}")
+        return {"result": "unknown", "player_gesture": "unknown"}
+
 # ==========================================
 # 3. ROS2 机械臂控制节点
 # ==========================================
@@ -224,6 +314,7 @@ class ManipulatorControlNode(Node):
             h_msg.position = self.target_hand_pos[hand_side]
             pub.publish(h_msg)
 
+
 # ==========================================
 # 4. 串行交互动作流
 # ==========================================
@@ -244,12 +335,31 @@ def play_game_routine(node: ManipulatorControlNode):
     
     node.set_hand_target('b', action_values)
     
-    print("[LOG][GAME] ⏳ 保持出招姿态 4 秒供用户观察结果...")
-    # time.sleep(4.0)
+    try:
+        from script.game_trajectory import replay_game_trajectory
+
+        replay_game_trajectory(node, GAME_TRAJECTORY_DB, int(GAME_TRAJECTORY_ID))
+    except Exception as exc:
+        logger.exception("Game_Flow: trajectory replay failed", error=str(exc))
+        print(f"[LOG][GAME] 轨迹回放失败，本局取消: {exc}")
+        node.set_hand_target('b', GESTURES['paper'])
+        node.ctrl_cb()
+        return
+    print("[LOG][GAME] ⏳ 保持出招姿态，等待玩家亮拳...")
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        rclpy.spin_once(node, timeout_sec=0.01)
+    judgment = judge_game_result(action_name)
+    result_labels = {"win": "你赢了", "lose": "机器人赢了", "draw": "平局", "unknown": "无法判定"}
+    print(
+        f"[LOG][GAME] 视觉判定 -> 玩家: {judgment['player_gesture']}, "
+        f"结果: {result_labels[judgment['result']]}"
+    )
     
     print("[LOG][GAME] >>> 恢复默认状态 (Paper)，结束本次游戏。\n")
     logger.info("Game_Flow: Resetting to default posture")
     node.set_hand_target('b', GESTURES['paper'])
+    node.ctrl_cb()
 
 # ==========================================
 # 5. 主单线程串行循环 (含 VAD 原版平移)
