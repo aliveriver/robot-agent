@@ -27,7 +27,7 @@ class GameCameraTest(unittest.TestCase):
         popen.assert_called_once_with(
             ["bash", "-lc", "source install/setup.bash && ros2 launch test_camera demo.py"],
             cwd="/camera/ws", start_new_session=True,
-            stdout=-3, stderr=-3,
+            stdout=None, stderr=None,
         )
         self.assertTrue(launcher.started)
         with patch("script.game_camera.os.getpgid", return_value=1234, create=True) as getpgid, \

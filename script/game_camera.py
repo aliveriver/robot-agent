@@ -42,8 +42,8 @@ class GameCameraLauncher:
                 ["bash", "-lc", command],
                 cwd=cwd,
                 start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=None,
+                stderr=None,
             )
             delay = float(os.getenv("GAME_CAMERA_STARTUP_DELAY_SEC", "3.0"))
             if delay < 0:
@@ -54,7 +54,14 @@ class GameCameraLauncher:
             if self._process.poll() is not None:
                 raise RuntimeError(f"摄像头进程已退出，返回码={self._process.returncode}")
         except Exception as exc:
+            process = self._process
             self._process = None
+            if process is not None and process.poll() is None:
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                    process.wait(timeout=5)
+                except Exception:
+                    pass
             raise RuntimeError(f"摄像头启动失败（cwd={cwd!r}）：{exc}") from exc
 
     def stop(self) -> None:
