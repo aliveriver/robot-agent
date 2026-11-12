@@ -1,0 +1,28 @@
+[Unit]
+Description=Robot Agent with recoverable voice and ROS2 control
+Wants=pulseaudio.service
+After=pulseaudio.service
+Conflicts=robot-control.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+WorkingDirectory=%h/robot-agent
+EnvironmentFile=-%h/.config/robot-agent/runtime.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+RuntimeDirectory=robot-agent
+Environment=ROS_LOG_DIR=%t/robot-agent/ros
+Environment=TMPDIR=%t/robot-agent
+ExecStart=/bin/bash -c 'source /home/nvidia/data/param/ros2_setup.bash; exec /bin/bash ./run.sh'
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robot-agent
+
+[Install]
+WantedBy=default.target

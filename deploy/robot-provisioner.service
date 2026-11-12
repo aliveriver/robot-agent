@@ -1,0 +1,24 @@
+[Unit]
+Description=Robot BLE hotspot provisioning
+Wants=bluetooth.service NetworkManager.service
+After=bluetooth.service NetworkManager.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/robot-provisioner
+EnvironmentFile=-/etc/robot-provisioner.conf
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -B -m provisioning.service
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=80
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
