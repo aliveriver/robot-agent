@@ -1,4 +1,4 @@
-"""判定结束后回到本局开局姿态：生成平滑插值帧，复用原双臂播放器。"""
+"""生成回到指定初始姿态的平滑插值帧，复用双臂播放器。"""
 
 import math
 import os
@@ -36,5 +36,5 @@ def return_to_initial_pose(node, initial_pose: dict[int, float]) -> None:
     duration = float(os.getenv("GAME_RETURN_DURATION_SEC", "4.0"))
     speed = float(os.getenv("GAME_RETURN_SPEED_RAD_SEC", "0.35"))
     frames, duration = build_return_frames(start, initial_pose, duration, speed)
-    print(f"[LOG][GAME] 缓慢回到本局开局姿态，预计 {duration:.2f} 秒。")
+    print(f"[LOG][GAME] 缓慢回到固定初始姿态，预计 {duration:.2f} 秒。")
     play_arm_frames(node, frames, 0.02, speed=speed)

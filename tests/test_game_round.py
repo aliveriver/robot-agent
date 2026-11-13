@@ -12,6 +12,34 @@ from script.game_round import CountdownAudio, GameTiming, run_game_round, wait_w
 
 
 class GameRoundTest(unittest.TestCase):
+    def setUp(self):
+        resolver = patch("script.game_round.resolve_game_audio", return_value=Path("preset.wav"))
+        self.resolve_audio = resolver.start()
+        self.addCleanup(resolver.stop)
+        result = patch("script.game_round.play_result_audio")
+        self.result_audio = result.start()
+        self.addCleanup(result.stop)
+        restore = patch("script.game_round.return_to_initial_pose")
+        self.restore_pose = restore.start()
+        self.addCleanup(restore.stop)
+
+    def test_each_round_uses_the_fixed_startup_pose(self):
+        node, countdown = Mock(), Mock()
+        node.game_initial_pose = {11: 0.2, 21: -0.2}
+        countdown.finished.return_value = True
+        with patch("script.game_round.CountdownAudio", return_value=countdown), \
+                patch("script.game_round.wait_with_ros"), \
+                patch("script.game_round.replay_game_trajectory"), \
+                patch("script.game_round.judge_while_holding", return_value={"result": "draw", "player_gesture": "rock"}):
+            for _ in range(2):
+                run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=Mock(),
+                               db_path=Path("track.db"), trajectory_id=11, root=Path("repo"))
+        node.capture_arm_pose.assert_not_called()
+        self.assertEqual(self.restore_pose.call_count, 2)
+        for call in self.restore_pose.call_args_list:
+            self.assertEqual(call.args[1], {11: 0.2, 21: -0.2})
+            self.assertIsNot(call.args[1], node.game_initial_pose)
+
     def test_missing_initial_feedback_prevents_motion(self):
         node = Mock()
         node.capture_arm_pose.side_effect = RuntimeError("missing feedback")
@@ -78,7 +106,8 @@ class GameRoundTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "motion failed"):
                 run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=judge,
                                db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
-        node.set_hand_target.assert_called_once_with('b', [1])
+        self.assertEqual(node.set_hand_target.call_args_list[0].args, ('b', [1]))
+        node.set_hand_target.assert_called_with('b', [0])
         judge.assert_not_called()
         countdown.stop.assert_called_once()
 
@@ -95,7 +124,8 @@ class GameRoundTest(unittest.TestCase):
                                db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
         judge.assert_not_called()
         countdown.stop.assert_called_once()
-        node.set_hand_target.assert_called_once_with('b', [1])
+        self.assertEqual(node.set_hand_target.call_args_list[0].args, ('b', [1]))
+        node.set_hand_target.assert_called_with('b', [0])
 
     def test_slow_judgment_keeps_control_running_and_only_then_retracts(self):
         started, release, finished = threading.Event(), threading.Event(), threading.Event()
@@ -141,7 +171,7 @@ class GameRoundTest(unittest.TestCase):
         restore.assert_called_once_with(node, node.capture_arm_pose.return_value)
         node.set_hand_target.assert_called_with('b', [0])
 
-    def test_unknown_or_failed_judgment_keeps_pose_without_retracting(self):
+    def test_unknown_or_failed_judgment_returns_to_home(self):
         for outcome in ({"result": "unknown", "player_gesture": "unknown"}, RuntimeError("API failed")):
             with self.subTest(outcome=outcome):
                 node, countdown = Mock(), Mock()
@@ -164,9 +194,9 @@ class GameRoundTest(unittest.TestCase):
                         run_game_round(node, gestures={"rock": [1], "paper": [0]}, judge_result=Mock(),
                                        db_path=Path("track.db"), trajectory_id=5, root=Path("repo"))
                 self.assertEqual(replay.call_count, 1)
-                restore.assert_not_called()
-                node.set_hand_target.assert_called_with('b', [1])
-                self.assertEqual(node.set_hand_target.call_count, 2)
+                restore.assert_called_once_with(node, node.capture_arm_pose.return_value)
+                node.set_hand_target.assert_called_with('b', [0])
+                self.assertEqual(node.set_hand_target.call_count, 3)
                 countdown.stop.assert_called_once()
 
     def test_countdown_starts_once_near_end_using_actual_file_duration(self):

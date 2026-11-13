@@ -1,4 +1,4 @@
-"""猜拳时序：保存开局姿态、准备、回放/口令、出拳、判定、缓慢回位。
+"""猜拳时序：准备、回放/口令、出拳、判定、缓慢回到固定启动姿态。
 
 run_game_round() 复用轨迹播放器和 AudioPlaybackController；GameTiming.from_env()
 读取停顿和音频时序，CountdownAudio 根据音频实际长度安排开始时机。
@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
+from script.game_audio import resolve_game_audio
 from script.game_trajectory import replay_game_trajectory
 from script.game_return import return_to_initial_pose
 
@@ -49,7 +50,8 @@ class GameTiming:
 class CountdownAudio:
     """按剩余轨迹时长启动本地音频；未配置文件时保留模拟口令的时间。"""
 
-    def __init__(self, audio_path: Path | None, timing: GameTiming):
+    def __init__(self, audio_path: Path | None, timing: GameTiming, source_type: str = "game_countdown"):
+        self.source_type = source_type
         self.duration = timing.countdown_sec
         self.lead = timing.audio_lead_sec
         self.path = audio_path
@@ -79,9 +81,9 @@ class CountdownAudio:
         if self.started:
             return
         if self.controller is not None:
-            status = self.controller.play(self.path, "game_countdown")
+            status = self.controller.play(self.path, self.source_type)
             self.session_id = status["session_id"]
-            print(f"[LOG][GAME] 播放猜拳口令 ({self.duration:.2f} 秒): {self.path}")
+            print(f"[LOG][GAME] 播放猜拳音频 ({self.duration:.2f} 秒): {self.path}")
         else:
             print(f"[LOG][GAME] 尚未配置音频，模拟口令时序 {self.duration:.2f} 秒。")
         self.started = True
@@ -138,16 +140,33 @@ def judge_while_holding(node, judge_result, robot_gesture: str) -> dict:
         executor.shutdown(wait=False, cancel_futures=True)
 
 
+
+def play_result_audio(node, root: Path, result: str, timing: GameTiming) -> None:
+    """Play the human-perspective outcome while continuing ROS control callbacks."""
+    audio = CountdownAudio(resolve_game_audio(root, result), timing, source_type="game_result")
+    try:
+        audio.start()
+        while not audio.finished():
+            wait_with_ros(node, 0.01)
+    finally:
+        audio.stop()
+
+
 def run_game_round(node, *, gestures: dict, judge_result, db_path: Path,
                    trajectory_id: int, root: Path) -> dict:
-    """保存本局实测开局姿态；判定完成后直接缓慢回位。"""
+    """回放并判定；正常结束、未知结果或中断后均回到固定启动姿态。"""
     timing = GameTiming.from_env()
-    initial_pose = node.capture_arm_pose()
+    saved_pose = getattr(node, "game_initial_pose", None)
+    # The game entrypoint captures this once, before any arm motion.
+    # Standalone callers without a startup anchor retain measured-pose fallback.
+    initial_pose = saved_pose.copy() if isinstance(saved_pose, dict) else node.capture_arm_pose()
     node.set_arm_mode('b', 'lock')
     configured_path = os.getenv("GAME_COUNTDOWN_AUDIO", "").strip()
     audio_path = Path(configured_path).expanduser() if configured_path else None
     if audio_path is not None and not audio_path.is_absolute():
         audio_path = root / audio_path
+    if audio_path is None:
+        audio_path = resolve_game_audio(root, "countdown")
     countdown = CountdownAudio(audio_path, timing)
     try:
         # 准备期用统一握拳姿势，最终随机结果在口令结束后才产生。
@@ -170,13 +189,19 @@ def run_game_round(node, *, gestures: dict, judge_result, db_path: Path,
         judgment = judge_while_holding(node, judge_result, action_name)
         labels = {"win": "你赢了", "lose": "机器人赢了", "draw": "平局", "unknown": "无法判定"}
         print(f"[LOG][GAME] 玩家: {judgment['player_gesture']}，结果: {labels[judgment['result']]}")
-        if judgment['result'] in ('win', 'lose', 'draw'):
-            print("[LOG][GAME] 判定完成，收手并缓慢回到本局开局姿态。")
+        if judgment['result'] in ('win', 'lose'):
+            try:
+                play_result_audio(node, root, judgment['result'], timing)
+            except Exception as exc:
+                # A speaker failure must not prevent the normal arm return.
+                print(f"[LOG][GAME] 胜负语音播放失败: {exc}")
+        return judgment
+    finally:
+        try:
+            countdown.stop()
+        finally:
+            # Never leave the robot holding a raised gesture after an API failure.
+            print("[LOG][GAME] 本局结束，松开双手并缓慢回到固定初始姿态。")
             node.set_hand_target('b', gestures['paper'])
             node.ctrl_cb()
             return_to_initial_pose(node, initial_pose)
-        else:
-            print("[LOG][GAME] 尚未判定输赢，保持当前姿势，不自动收回。")
-        return judgment
-    finally:
-        countdown.stop()

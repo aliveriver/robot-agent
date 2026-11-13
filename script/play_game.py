@@ -200,6 +200,10 @@ def judge_game_result(robot_gesture: str) -> dict:
         if not image_b64:
             raise RuntimeError("摄像头未能采集到画面")
 
+        from script.game_image import save_game_image
+
+        save_game_image(image_b64, _ROBOT_AGENT_ROOT)
+
         payload = {
             "model": GAME_VISION_MODEL,
             "temperature": 0,
@@ -342,7 +346,7 @@ class ManipulatorControlNode(Node):
 # 4. 串行交互动作流
 # ==========================================
 def play_game_routine(node: ManipulatorControlNode):
-    """保存开局姿态，出手后等待视觉判定，再直接缓慢回到开局姿态。"""
+    """出拳并判定，结束后缓慢回到程序启动时固定保存的双臂姿态。"""
     from script.game_round import run_game_round
 
     try:
@@ -372,7 +376,10 @@ def main():
     try:
         node = ManipulatorControlNode()
         # No arm commands are enabled until camera initialization succeeds.
-        node.capture_arm_pose()
+        # Keep one fixed home pose for the lifetime of this process.
+        # Start the program with both arms naturally lowered.
+        node.game_initial_pose = node.capture_arm_pose()
+        print("[LOG][GAME] 已保存启动时双臂姿态；每局结束后缓慢回到此固定位置。")
         camera_launcher.start(node)
         node.set_arm_mode('b', 'lock')  # 默认锁紧双臂支撑体
 
