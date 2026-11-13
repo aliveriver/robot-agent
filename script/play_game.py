@@ -366,44 +366,37 @@ def main():
         sys.exit(1)
 
     rclpy.init()
-    node = ManipulatorControlNode()
-    try:
-        node.capture_arm_pose()
-    except Exception:
-        node.destroy_node()
-        rclpy.shutdown()
-        raise
+    node = None
+    stream = None
     camera_launcher = GameCameraLauncher()
     try:
+        node = ManipulatorControlNode()
+        # No arm commands are enabled until camera initialization succeeds.
+        node.capture_arm_pose()
         camera_launcher.start(node)
-    except Exception:
-        node.destroy_node()
-        rclpy.shutdown()
-        raise
-    node.set_arm_mode('b', 'lock')  # 默认锁紧双臂支撑体
+        node.set_arm_mode('b', 'lock')  # 默认锁紧双臂支撑体
 
-    print("\n" + "★"*60)
-    print(" 🎮 语音猜拳核心循环已开启")
-    print(f" 🎯 关键字表: {trigger_keywords}")
-    print(f" 轨迹数据库: {GAME_TRAJECTORY_DB}，回放 ID: {GAME_TRAJECTORY_ID}")
-    print(" 🎤 运行中... 请对着麦克风说话。")
-    print("★"*60 + "\n")
+        print("\n" + "★"*60)
+        print(" 🎮 语音猜拳核心循环已开启")
+        print(f" 🎯 关键字表: {trigger_keywords}")
+        print(f" 轨迹数据库: {GAME_TRAJECTORY_DB}，回放 ID: {GAME_TRAJECTORY_ID}")
+        print(" 🎤 运行中... 请对着麦克风说话。")
+        print("★"*60 + "\n")
 
-    # 开启物理输入流
-    stream = sd.InputStream(
-        samplerate=audio_cfg.sample_rate,
-        channels=audio_cfg.channels,
-        dtype="float32",
-        blocksize=audio_cfg.blocksize
-    )
-    stream.start()
+        # 开启物理输入流
+        stream = sd.InputStream(
+            samplerate=audio_cfg.sample_rate,
+            channels=audio_cfg.channels,
+            dtype="float32",
+            blocksize=audio_cfg.blocksize
+        )
+        stream.start()
 
-    # 原版 VAD 状态机变量
-    _in_speech = False
-    _silence_started_at = None
-    _current_audio_frames = []
+        # 原版 VAD 状态机变量
+        _in_speech = False
+        _silence_started_at = None
+        _current_audio_frames = []
 
-    try:
         while True:
             # 1. 刷新 ROS 底层状态（耗时 ~0，防止单线程逻辑导致死节点）
             rclpy.spin_once(node, timeout_sec=0.0)
@@ -494,11 +487,23 @@ def main():
     except KeyboardInterrupt:
         print("\n[LOG][EXIT] 捕捉到用户中断信号 (Ctrl+C)。")
     finally:
-        stream.stop()
-        stream.close()
-        node.destroy_node()
-        rclpy.shutdown()
-        camera_launcher.stop()
+        # Also run when startup or microphone initialization fails.
+        try:
+            if stream is not None:
+                try:
+                    stream.stop()
+                finally:
+                    stream.close()
+        finally:
+            try:
+                camera_launcher.stop()
+            finally:
+                try:
+                    if node is not None:
+                        node.destroy_node()
+                finally:
+                    if rclpy.ok():
+                        rclpy.shutdown()
         print("[LOG][EXIT] 节点与底层音频资源已安全离线。")
 
 if __name__ == '__main__':

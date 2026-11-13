@@ -201,7 +201,7 @@ class Settings(BaseSettings):
 
         app_section = yaml_data.get("app", {})
         return cls(
-            lang=app_section["lang"],
+            lang="cn",
             log_level=app_section["log_level"],
             env=app_section["env"],
             ignore_non_chinese_input=app_section.get("ignore_non_chinese_input", False),
