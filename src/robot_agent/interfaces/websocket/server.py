@@ -17,6 +17,7 @@ import json
 import logging
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Set
 
@@ -56,7 +57,20 @@ logger = _ProtocolLogger()
 
 app = FastAPI(title="Robot Remote Control")
 _clients: Set[WebSocket] = set()
+_sessions: dict[str, WebSocket] = {}
 _server_task: asyncio.Task | None = None
+_uvicorn_server: uvicorn.Server | None = None
+
+
+class _ManagedServer(uvicorn.Server):
+    """Leave OS signals to the Agent owner so every worker is cleaned up together."""
+
+    @contextmanager
+    def capture_signals(self):
+        yield
+
+    def install_signal_handlers(self) -> None:
+        """Compatibility with older Uvicorn releases used by existing installations."""
 
 
 async def _build_state() -> AgentState:
@@ -391,11 +405,25 @@ _ACTION_HANDLERS: dict[str, Any] = {
 # ── HTTP endpoints ───────────────────────────────────────────────
 
 @app.get("/ping")
-async def http_ping():
-    return JSONResponse({"ok": True, "name": "天轶 2.0 Pro", "ws_port": 8765})
+async def http_ping(session_id: str | None = None, peer_ip: str | None = None):
+    """Optionally validate an existing WS session independently of slow commands."""
+    result = {"ok": True, "name": "天轶 2.0 Pro", "ws_port": 8765}
+    if session_id is not None:
+        result["session_alive"] = session_id in _sessions
+    if peer_ip is not None:
+        result["peer_connected"] = any(ws.client and ws.client.host == peer_ip for ws in _clients)
+    return JSONResponse(result)
 
 
 # ── WebSocket endpoint ───────────────────────────────────────────
+
+@app.get("/health")
+async def http_health():
+    """Report optional capability readiness separately from control connectivity."""
+    from src.robot_agent.bootstrap.health import runtime_health
+    if runtime_health.snapshot()['mode'] == 'control-only':
+        runtime_health.set('control', 'ready')
+    return JSONResponse(runtime_health.snapshot())
 
 async def _send(ws: WebSocket, data: dict) -> None:
     try:
@@ -408,6 +436,8 @@ async def _send(ws: WebSocket, data: dict) -> None:
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
     _clients.add(ws)
+    session_id = uuid.uuid4().hex
+    _sessions[session_id] = ws
     remote = ws.client
     logger.info("ws: client connected", remote=str(remote))
 
@@ -415,7 +445,7 @@ async def websocket_endpoint(ws: WebSocket):
         await _send(ws, {
             "type": "event",
             "event": "connected",
-            "data": {"robot_name": "天轶 2.0 Pro", "actions": list(_ACTION_HANDLERS.keys())},
+            "data": {"robot_name": "天轶 2.0 Pro", "actions": list(_ACTION_HANDLERS.keys()), "session_id": session_id},
         })
 
         while True:
@@ -460,6 +490,7 @@ async def websocket_endpoint(ws: WebSocket):
         logger.debug("ws: connection error", error=str(exc))
     finally:
         _clients.discard(ws)
+        _sessions.pop(session_id, None)
         if not _clients:
             try:
                 await asyncio.to_thread(_trajectory_manager().stop_active)
@@ -482,20 +513,42 @@ async def broadcast(event: str, data: dict) -> None:
 # ── Server lifecycle ─────────────────────────────────────────────
 
 async def start_server(host: str = "0.0.0.0", port: int = 8765) -> None:
-    global _server_task
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
-    server = uvicorn.Server(config)
+    global _server_task, _uvicorn_server
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning", timeout_graceful_shutdown=5)
+    server = _ManagedServer(config)
+    _uvicorn_server = server
     _server_task = asyncio.create_task(server.serve())
+    # Do not report the Agent ready before the actual listener has been bound.
+    for _ in range(250):
+        if server.started:
+            break
+        if _server_task.done():
+            await _server_task
+            raise RuntimeError('Control server exited before listening')
+        await asyncio.sleep(0.02)
+    else:
+        await stop_server()
+        raise RuntimeError('Control listener startup timed out')
     logger.info("ws: FastAPI server started", host=host, port=port)
 
 
 async def stop_server() -> None:
-    global _server_task
+    global _server_task, _uvicorn_server
     if _server_task is not None:
-        _server_task.cancel()
+        if _uvicorn_server is not None:
+            _uvicorn_server.should_exit = True
         try:
-            await _server_task
-        except asyncio.CancelledError:
+            await asyncio.wait_for(_server_task, timeout=8)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
             pass
         _server_task = None
+        _uvicorn_server = None
         logger.info("ws: server stopped")
+
+
+async def watch_server() -> None:
+    """Fail the owning Agent if its mandatory listener stops unexpectedly."""
+    if _server_task is None:
+        raise RuntimeError('Control server not running')
+    await asyncio.shield(_server_task)
+    raise RuntimeError('Control server stopped unexpectedly')

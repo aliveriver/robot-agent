@@ -59,6 +59,7 @@ class MicrophoneListener:
 
         self._stream = None
         self._worker_thread: threading.Thread | None = None
+        self._failure = threading.Event()
         self._sample_rate = self._audio_cfg.sample_rate
 
     def start(self) -> None:
@@ -68,6 +69,7 @@ class MicrophoneListener:
             return
 
         self._stop_event.clear()
+        self._failure.clear()
         self._worker_thread = threading.Thread(
             target=self._run,
             daemon=True,
@@ -82,7 +84,19 @@ class MicrophoneListener:
             speech_threshold=self._audio_cfg.speech_threshold,
         )
 
-    def stop(self) -> None:
+    def is_ready(self) -> bool:
+        """Require an active input stream, not merely a thread that was launched."""
+        try:
+            return bool(self._worker_thread and self._worker_thread.is_alive()
+                        and self._stream is not None and self._stream.active)
+        except Exception:
+            return False
+
+    def has_failed(self) -> bool:
+        """Expose stream/thread failure to the retrying voice supervisor."""
+        return self._failure.is_set()
+
+    def stop(self, flush: bool = True) -> None:
         """停止麦克风采集并关闭输入流。"""
         self._stop_event.set()
         self._close_stream()
@@ -90,7 +104,8 @@ class MicrophoneListener:
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=1.0)
 
-        self._flush_current_segment(force=True)
+        if flush:
+            self._flush_current_segment(force=True)
         self._current_audio_frames = []
         self._in_speech = False
         self._silence_started_at = None
@@ -99,8 +114,8 @@ class MicrophoneListener:
 
     def _run(self) -> None:
         """启动输入流，并在后台线程中消费音频队列。"""
-        self._start_input_stream()
         try:
+            self._start_input_stream()
             while not self._stop_event.is_set():
                 try:
                     audio_chunk = self._audio_frame_queue.get(timeout=0.1)
@@ -111,6 +126,9 @@ class MicrophoneListener:
                     self._handle_audio_chunk(audio_chunk)
                 finally:
                     self._audio_frame_queue.task_done()
+        except Exception as exc:
+            self._failure.set()
+            logger.warning('microphone: input unavailable', error_type=type(exc).__name__)
         finally:
             self._close_stream()
 

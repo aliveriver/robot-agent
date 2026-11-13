@@ -1,0 +1,22 @@
+[Unit]
+Description=Robot WebSocket control without voice hardware
+Conflicts=robot-agent.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+WorkingDirectory=%h/robot-agent
+RuntimeDirectory=robot-control
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=ROS_LOG_DIR=%t/robot-control/ros
+Environment=TMPDIR=%t/robot-control
+ExecStart=/bin/bash -c 'source /home/nvidia/data/param/ros2_setup.bash; source /opt/PARTITIONS/A/ros2ws/install/setup.bash; source /home/nvidia/miniconda3/etc/profile.d/conda.sh; conda activate agent; exec python -B -m uvicorn src.robot_agent.interfaces.websocket.server:app --host 0.0.0.0 --port 8765 --log-level warning'
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
