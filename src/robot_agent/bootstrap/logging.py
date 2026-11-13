@@ -15,11 +15,11 @@ import sys
 
 import structlog
 
-from src.robot_agent.settings import settings
-
-
 def setup_logging() -> None:
     """配置 structlog 全局处理管道，需在应用启动时调用一次"""
+    # 仅完整 Agent 初始化日志时加载全局配置；复用相机等组件无需整套配置。
+    from src.robot_agent.settings import settings
+
     log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
 
     # 配置标准库日志

@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""语音触发猜拳，同时复用数据库轨迹回放，并通过视觉 API 判断结果。"""
 
 import os
 import sys
 import time
-import random
 import glob
+import asyncio
+import json
+import math
+import urllib.request
+from pathlib import Path
 import numpy as np
 import sounddevice as sd
 import sherpa_onnx
+from dotenv import load_dotenv
+
+_ROBOT_AGENT_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROBOT_AGENT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROBOT_AGENT_ROOT))
+load_dotenv(_ROBOT_AGENT_ROOT / ".env")
+from script.trajectory_manager.arm_currents import ARM_CURRENTS
+from script.game_camera import GameCameraLauncher
 
 # ── ROS2 workspace Python 路径注入 ──────────
 _ROS2_WS = os.environ.get("ROS2_WS", "/opt/PARTITIONS/A/ros2ws")
@@ -19,10 +32,7 @@ for _p in glob.glob(f"{_ROS2_WS}/install/*/local/lib/python*/dist-packages"):
 import re
 import rclpy
 from rclpy.node import Node
-from src.robot_agent.bootstrap.logging import get_logger
 
-# 初始化系统结构化日志
-logger = get_logger(__name__)
 
 try:
     from bodyctrl_msgs.msg import MotorStatusMsg, CmdSetMotorPosition, SetMotorPosition
@@ -43,11 +53,6 @@ GESTURES = {
 LEFT_ARM_IDS = [11, 12, 13, 14, 15, 16, 17]
 RIGHT_ARM_IDS = [21, 22, 23, 24, 25, 26, 27]
 
-SAFE_LOCK_CURRENT = {
-    11: 6.0, 12: 5.0, 13: 4.0, 14: 4.0, 15: 2.0, 16: 2.0, 17: 2.0,
-    21: 6.0, 22: 5.0, 23: 4.0, 24: 4.0, 25: 2.0, 26: 2.0, 27: 2.0,
-}
-
 class AudioConfig:
     sample_rate = 16000
     channels = 1
@@ -62,6 +67,22 @@ class AudioConfig:
 audio_cfg = AudioConfig()
 trigger_keywords = ["石头剪刀布", "猜拳", "玩游戏", "玩个游戏", "比划比划"]
 
+# OpenAI-compatible vision endpoint; configure these values in robot-agent/.env.
+GAME_VISION_API_URL = os.getenv("GAME_VISION_API_URL", "")
+# 兼容已经从旧示例复制的重复协议头，避免把 "https" 当成 DNS 主机名。
+if GAME_VISION_API_URL.startswith("https://https://"):
+    GAME_VISION_API_URL = GAME_VISION_API_URL.removeprefix("https://")
+elif GAME_VISION_API_URL.startswith("http://http://"):
+    GAME_VISION_API_URL = GAME_VISION_API_URL.removeprefix("http://")
+GAME_VISION_API_KEY = os.getenv("GAME_VISION_API_KEY", "")
+GAME_VISION_MODEL = os.getenv("GAME_VISION_MODEL", "")
+# 录制与回放共用的数据库：record_game_trajectory.py 保存到此文件。
+# Linux 上相对本文件定位，不依赖运行目录；录制后 ID 自动写入 .env。
+GAME_TRAJECTORY_DB = (
+    Path(__file__).resolve().parent / "trajectory_manager" / "data" / "trajectories.db"
+)
+GAME_TRAJECTORY_ID = os.getenv("GAME_TRAJECTORY_ID", "5")  # 录制脚本会更新此配置
+
 # ==========================================
 # 2. Sherpa-ONNX (SenseVoice) 识别引擎
 # ==========================================
@@ -70,7 +91,6 @@ recognizer = None
 def initSherpaOnnx():
     global recognizer
     print("\n[LOG][INIT] 正在加载 Sherpa-ONNX SenseVoice 模型...")
-    logger.info("ASR_Engine: Starting model initialization")
     try:
         model_dir = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17"
         model_path = os.path.join(model_dir, "model_quant.onnx")
@@ -81,7 +101,6 @@ def initSherpaOnnx():
              
         if not os.path.exists(model_path) or not os.path.exists(tokens_path):
             print(f"[LOG][ERROR] 模型文件未在 {model_dir} 中找到。")
-            logger.error("ASR_Engine: Initialization failed, files missing", model_dir=model_dir)
             return False
 
         recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
@@ -91,11 +110,9 @@ def initSherpaOnnx():
             debug=False,
         )
         print("[LOG][INIT] Sherpa-ONNX SenseVoice 模型加载成功")
-        logger.info("ASR_Engine: Initialization successful")
         return True
     except Exception as e:
         print(f"[LOG][ERROR] Sherpa-ONNX 模型加载失败: {e}")
-        logger.exception("ASR_Engine: Exception during init", error=str(e))
         return False
 def match_trigger_keywords(text: str) -> bool:
     """
@@ -147,7 +164,6 @@ def match_trigger_keywords(text: str) -> bool:
 def useASR_science_voice(audio_data):
     asr1 = time.time()
     print(f"\n[时间戳] ASR开始: {asr1}")
-    logger.info("ASR_Process: Inference started", timestamp=asr1, data_len=len(audio_data))
     raw_text = ""                 
     try:
         stream = recognizer.create_stream()
@@ -156,14 +172,88 @@ def useASR_science_voice(audio_data):
         raw_text = stream.result.text
     except Exception as e:
         print(f"[LOG][ERROR] ASR识别出错: {e}")
-        logger.error("ASR_Process: Decode exception", error=str(e))
     finally:
         # 移至 finally 块，确保无论成功或失败均能统计耗时与结束戳
         asr2 = time.time()
         print(f"[时间戳] ASR结束: {asr2}")
         print(f"[时间戳] ASR识别时长: {asr2 - asr1:.4f} 秒")
-        logger.info("ASR_Process: Inference completed", timestamp=asr2, duration=asr2-asr1, text=raw_text)
     return raw_text
+
+
+def judge_game_result(robot_gesture: str) -> dict:
+    """Capture the revealed hands and ask an OpenAI-compatible vision model to judge the round."""
+    if not GAME_VISION_API_URL or not GAME_VISION_API_KEY or not GAME_VISION_MODEL:
+        print("[LOG][GAME] 视觉 API 尚未配置，胜负判定为未知。")
+        return {"result": "unknown", "player_gesture": "unknown"}
+
+    try:
+        from src.robot_agent.capabilities.vision.ros_camera import get_camera_provider
+
+        camera = get_camera_provider(
+            topic=os.getenv("VISION_CAMERA_TOPIC", "/camera/color/image_raw"),
+            timeout=float(os.getenv("VISION_CAPTURE_TIMEOUT", "2.0")),
+            save_dir=os.getenv("VISION_SAVE_DIR", str(_ROBOT_AGENT_ROOT / "data/camera")),
+            local_device_index=int(os.getenv("VISION_LOCAL_DEVICE_INDEX", "0")),
+            prefer_ros=os.getenv("VISION_PREFER_ROS", "true").lower() in ("true", "1", "yes"),
+        )
+        image_b64 = asyncio.run(camera.capture_base64())
+        if not image_b64:
+            raise RuntimeError("摄像头未能采集到画面")
+
+        payload = {
+            "model": GAME_VISION_MODEL,
+            "temperature": 0,
+            "max_tokens": 120,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                "这是一局石头剪刀布。图中机器人出的是"
+                                f"{robot_gesture}。识别画面中人类玩家出拳（rock、paper、scissors 或 unknown），"
+                                "并判断从人类玩家视角的结果（win、lose、draw 或 unknown）。"
+                                '只返回 JSON：{"player_gesture":"rock|paper|scissors|unknown",'
+                                '"result":"win|lose|draw|unknown"}。不要猜测看不清的手势。'
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+                        },
+                    ],
+                }
+            ],
+        }
+        request = urllib.request.Request(
+            GAME_VISION_API_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {GAME_VISION_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            api_response = json.loads(response.read().decode("utf-8"))
+        content = api_response["choices"][0]["message"]["content"]
+        if isinstance(content, list):
+            content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.strip("`").removeprefix("json").strip()
+        judgment = json.loads(content)
+        player_gesture = judgment.get("player_gesture", "unknown").lower()
+        result = judgment.get("result", "unknown").lower()
+        if player_gesture not in {"rock", "paper", "scissors", "unknown"}:
+            player_gesture = "unknown"
+        if result not in {"win", "lose", "draw", "unknown"}:
+            result = "unknown"
+        return {"result": result, "player_gesture": player_gesture}
+    except Exception as exc:
+        print(f"[LOG][GAME] 视觉判定失败，结果未知: {exc}")
+        return {"result": "unknown", "player_gesture": "unknown"}
 
 # ==========================================
 # 3. ROS2 机械臂控制节点
@@ -179,15 +269,39 @@ class ManipulatorControlNode(Node):
         self.locked_arm_pos = {mid: 0.0 for mid in LEFT_ARM_IDS + RIGHT_ARM_IDS}
         self.arm_mode = {'l': 'idle', 'r': 'idle'}
         self.target_hand_pos = {'left': [1.0]*6, 'right': [1.0]*6}
+        self.arm_feedback_at = {}
+        self.arm_status_sub = self.create_subscription(
+            MotorStatusMsg, '/arm/status', self.arm_status_cb, 10)
         
         self.ctrl_timer = self.create_timer(0.1, self.ctrl_cb)
-        logger.info("ROS2_Node: ManipulatorControlNode initialized")
+
+    def arm_status_cb(self, msg):
+        """缓存双臂实测角度及接收时间，目标位置单独保存在 locked_arm_pos。"""
+        now = time.monotonic()
+        for item in msg.status:
+            mid, pos = int(item.name), float(item.pos)
+            if mid in self.current_arm_pos and math.isfinite(pos):
+                self.current_arm_pos[mid] = pos
+                self.arm_feedback_at[mid] = now
+
+    def capture_arm_pose(self, timeout=2.0):
+        """等待全部关节的新反馈并复制姿态；反馈不完整时取消，避免保存默认零值。"""
+        started = time.monotonic()
+        while rclpy.ok() and time.monotonic() - started < timeout:
+            rclpy.spin_once(self, timeout_sec=0.01)
+            if all(self.arm_feedback_at.get(mid, -1) >= started for mid in self.current_arm_pos):
+                return self.current_arm_pos.copy()
+        raise RuntimeError("未收到完整双臂实时反馈，无法保存/恢复姿态，请检查 /arm/status")
 
     def set_hand_target(self, target_hand, values):
         ratios = [float(max(0.0, min(1.0, (v / 100.0) if v > 1.5 else v))) for v in values]
         if target_hand in ['l', 'b']: self.target_hand_pos['left'] = ratios.copy()
         if target_hand in ['r', 'b']: self.target_hand_pos['right'] = ratios.copy()
-        logger.debug("ROS2_Node: Target hand position updated", target=target_hand, ratios=ratios)
+
+    @staticmethod
+    def _to_driver_hand_positions(logical_positions):
+        """逻辑手势为 0=张开、1=握紧；Inspire 驱动 position 方向相反。"""
+        return [1.0 - value for value in logical_positions]
 
     def set_arm_mode(self, side, mode):
         targets = ['l', 'r'] if side == 'b' else [side]
@@ -196,7 +310,6 @@ class ManipulatorControlNode(Node):
                 ids = LEFT_ARM_IDS if t == 'l' else RIGHT_ARM_IDS
                 for mid in ids: self.locked_arm_pos[mid] = self.current_arm_pos[mid]
             self.arm_mode[t] = mode
-        logger.info("ROS2_Node: Arm mode altered", side=side, mode=mode)
 
     def ctrl_cb(self):
         arm_msg = CmdSetMotorPosition()
@@ -212,7 +325,7 @@ class ManipulatorControlNode(Node):
                     if self.arm_mode[side] == 'limp':
                         item.pos, item.spd, item.cur = self.current_arm_pos[mid], 0.0, 0.0
                     elif self.arm_mode[side] == 'lock':
-                        item.pos, item.spd, item.cur = self.locked_arm_pos[mid], 3.14, SAFE_LOCK_CURRENT.get(mid, 2.0)
+                        item.pos, item.spd, item.cur = self.locked_arm_pos[mid], 3.14, ARM_CURRENTS[mid]
                     arm_msg.cmds.append(item)
         if arm_msg.cmds:
             self.arm_cmd_pub.publish(arm_msg)
@@ -221,35 +334,28 @@ class ManipulatorControlNode(Node):
             h_msg = JointState()
             h_msg.header.stamp = self.get_clock().now().to_msg()
             h_msg.name = ['1', '2', '3', '4', '5', '6']
-            h_msg.position = self.target_hand_pos[hand_side]
+            h_msg.position = self._to_driver_hand_positions(self.target_hand_pos[hand_side])
             pub.publish(h_msg)
+
 
 # ==========================================
 # 4. 串行交互动作流
 # ==========================================
 def play_game_routine(node: ManipulatorControlNode):
-    # print("\n[LOG][GAME] >>> ====== 猜拳游戏流正式触发 ======")
-    # logger.info("Game_Flow: Triggered")
-    
-    # print("[LOG][GAME] ⏳ 游戏响应：就绪停顿 3 秒...")
-    # time.sleep(3.0)
-    
-    # print("[LOG][GAME] 🔊 模拟广播音频: '石头、剪刀、布！'")
-    # logger.info("Game_Flow: Playing audio indicator")
-    # time.sleep(1.5) 
-    
-    action_name, action_values = random.choice(list(GESTURES.items()))
-    print(f"[LOG][GAME] 🤖 动作下发 -> 机器人选择出：【{action_name.upper()}】")
-    logger.info("Game_Flow: Robot action determined", gesture=action_name)
-    
-    node.set_hand_target('b', action_values)
-    
-    print("[LOG][GAME] ⏳ 保持出招姿态 4 秒供用户观察结果...")
-    # time.sleep(4.0)
-    
-    print("[LOG][GAME] >>> 恢复默认状态 (Paper)，结束本次游戏。\n")
-    logger.info("Game_Flow: Resetting to default posture")
-    node.set_hand_target('b', GESTURES['paper'])
+    """保存开局姿态，出手后等待视觉判定，再直接缓慢回到开局姿态。"""
+    from script.game_round import run_game_round
+
+    try:
+        run_game_round(
+            node,
+            gestures=GESTURES,
+            judge_result=judge_game_result,
+            db_path=GAME_TRAJECTORY_DB,
+            trajectory_id=int(GAME_TRAJECTORY_ID),
+            root=_ROBOT_AGENT_ROOT,
+        )
+    except Exception as exc:
+        print(f"[LOG][GAME] 本局取消: {exc}")
 
 # ==========================================
 # 5. 主单线程串行循环 (含 VAD 原版平移)
@@ -261,14 +367,27 @@ def main():
 
     rclpy.init()
     node = ManipulatorControlNode()
+    try:
+        node.capture_arm_pose()
+    except Exception:
+        node.destroy_node()
+        rclpy.shutdown()
+        raise
+    camera_launcher = GameCameraLauncher()
+    try:
+        camera_launcher.start(node)
+    except Exception:
+        node.destroy_node()
+        rclpy.shutdown()
+        raise
     node.set_arm_mode('b', 'lock')  # 默认锁紧双臂支撑体
 
     print("\n" + "★"*60)
-    print(" 🎮 语音猜拳核心循环已开启 (纯串行无多线程)")
+    print(" 🎮 语音猜拳核心循环已开启")
     print(f" 🎯 关键字表: {trigger_keywords}")
+    print(f" 轨迹数据库: {GAME_TRAJECTORY_DB}，回放 ID: {GAME_TRAJECTORY_ID}")
     print(" 🎤 运行中... 请对着麦克风说话。")
     print("★"*60 + "\n")
-    logger.info("Main_Loop: Serial pipeline running")
 
     # 开启物理输入流
     stream = sd.InputStream(
@@ -315,7 +434,6 @@ def main():
                     _in_speech = True
                     _current_audio_frames = []
                     print(f"\n[LOG][VAD] 🎤 检测到人声起跑 (当前峰值: {peak:.4f})")
-                    logger.info("VAD_State: Speech segment started", peak_val=peak)
                 _current_audio_frames.append(audio_chunk)
                 _silence_started_at = None
             elif _in_speech:
@@ -349,11 +467,9 @@ def main():
 
             if duration < audio_cfg.min_segment_sec:
                 print(f"[LOG][VAD] ⚠️ 录音片段过短 ({duration:.2f}s)，判定为环境杂音，丢弃。")
-                logger.debug("VAD_State: Segment dropped (too short)", duration=duration)
                 continue
 
             print(f"[LOG][VAD] 🛑 语音流截断完成。有效语音长度: {duration:.2f}s, 切片总数: {len(frames)}")
-            logger.info("VAD_State: Segment flushed successfully", duration=duration)
 
             # 6. 串行阻塞业务执行：停止录音 -> ASR 推理 -> 逻辑匹配 -> 动作 -> 恢复
             stream.stop()
@@ -382,6 +498,7 @@ def main():
         stream.close()
         node.destroy_node()
         rclpy.shutdown()
+        camera_launcher.stop()
         print("[LOG][EXIT] 节点与底层音频资源已安全离线。")
 
 if __name__ == '__main__':

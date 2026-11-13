@@ -10,6 +10,8 @@ import time
 import threading
 from dataclasses import dataclass, field
 
+from .arm_currents import ARM_CURRENTS
+
 # ROS2 导入（容错）
 _ROS2_AVAILABLE = False
 _ROS2_IMPORT_ERROR = ""
@@ -40,11 +42,8 @@ JOINT_LABELS = [
     "肩俯仰", "肩侧摆", "肩旋转", "肘弯曲", "腕旋转", "腕俯仰", "腕偏转"
 ]
 
-# 来自 control.py — 每个关节的安全锁紧电流上限
-SAFE_LOCK_CURRENT = {
-    11: 6.0, 12: 5.0, 13: 4.0, 14: 4.0, 15: 2.0, 16: 2.0, 17: 2.0,
-    21: 6.0, 22: 5.0, 23: 4.0, 24: 4.0, 25: 2.0, 26: 2.0, 27: 2.0,
-}
+# 与猜拳和原轨迹播放器使用相同默认值；Web 手动调节仅作用于本桥接模块。
+SAFE_LOCK_CURRENT = ARM_CURRENTS.copy()
 
 
 @dataclass
@@ -71,7 +70,10 @@ class SimBridge:
     def __init__(self):
         self.mode = "idle"
         self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
-        self.current_config = {"big_joint": 2.0, "small_joint": 2.0}
+        self.current_config = {
+            "big_joint": max(ARM_CURRENTS[mid] for mid in (11, 12, 21, 22)),
+            "small_joint": max(ARM_CURRENTS[mid] for mid in (13, 14, 15, 16, 17, 23, 24, 25, 26, 27)),
+        }
         self._hand_target = {"left": [1.0] * 6, "right": [1.0] * 6}
         self._t0 = time.time()
 
@@ -162,6 +164,8 @@ if _ROS2_AVAILABLE:
             self.locked_arm_pos = {mid: 0.0 for mid in ALL_ARM_IDS}
             self.target_hand_pos = {"left": [1.0] * 6, "right": [1.0] * 6}
             self.hands_initialized = False
+            self.received_arm_ids = set()
+            self.received_hands = set()
             self.joint_modes = {mid: "idle" for mid in ALL_ARM_IDS}
 
             # 腿部/腰部状态
@@ -176,14 +180,17 @@ if _ROS2_AVAILABLE:
                 mid = int(item.name)
                 if mid in self.current_arm_pos:
                     self.current_arm_pos[mid] = float(item.pos)
+                    self.received_arm_ids.add(mid)
 
         def _lhand_cb(self, msg):
             if len(msg.position) >= 6:
                 self.current_hand_pos["left"] = list(msg.position[:6])
+                self.received_hands.add("left")
 
         def _rhand_cb(self, msg):
             if len(msg.position) >= 6:
                 self.current_hand_pos["right"] = list(msg.position[:6])
+                self.received_hands.add("right")
 
         def _leg_cb(self, msg):
             for item in msg.status:
@@ -281,7 +288,10 @@ class RosBridge:
 
     @property
     def current_config(self):
-        return {"big_joint": 6.0, "small_joint": 2.0}
+        return {
+            "big_joint": max(SAFE_LOCK_CURRENT[mid] for mid in (11, 12, 21, 22)),
+            "small_joint": max(SAFE_LOCK_CURRENT[mid] for mid in (13, 14, 15, 16, 17, 23, 24, 25, 26, 27)),
+        }
 
     def get_snapshot(self) -> BodySnapshot:
         n = self._node
@@ -292,6 +302,16 @@ class RosBridge:
             right_hand=n.current_hand_pos["right"][:],
             timestamp=time.time(),
         )
+
+    def wait_ready(self, timeout: float = 5.0):
+        """录制前确认双臂和双手已有反馈，防止把初始零值录为真实轨迹。"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if (set(ALL_ARM_IDS).issubset(self._node.received_arm_ids)
+                    and self._node.received_hands == {"left", "right"}):
+                return
+            time.sleep(0.05)
+        raise RuntimeError("未收到完整双臂/双手反馈，请确认 /arm/status 和 /inspire_hand/state/*")
 
     def set_mode(self, mode: str):
         n = self._node

@@ -14,6 +14,8 @@ from .ros_bridge import BodySnapshot
 
 
 class Recorder:
+    """采样桥接层状态，停止时将元数据和全部帧作为一次事务保存。"""
+
     def __init__(self, bridge, on_frame: Optional[Callable] = None):
         self.bridge = bridge
         self.on_frame = on_frame
@@ -84,7 +86,7 @@ class Recorder:
         duration = self.frames[-1]["timestamp_ms"] / 1000.0
         db = await get_db()
         try:
-            await db.execute(
+            cursor = await db.execute(
                 """INSERT INTO trajectories (name, description, detailed_description, sample_interval_ms, total_frames, duration_sec)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (
@@ -96,10 +98,7 @@ class Recorder:
                     duration,
                 ),
             )
-            await db.commit()
-            cursor = await db.execute("SELECT last_insert_rowid()")
-            row = await cursor.fetchone()
-            trajectory_id = row[0]
+            trajectory_id = cursor.lastrowid
 
             await db.executemany(
                 """INSERT INTO trajectory_frames
@@ -120,5 +119,8 @@ class Recorder:
             )
             await db.commit()
             return trajectory_id
+        except Exception:
+            await db.rollback()
+            raise
         finally:
             await db.close()
